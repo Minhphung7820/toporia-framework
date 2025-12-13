@@ -546,9 +546,12 @@ final class RealtimeManager implements RealtimeManagerInterface
             'kafka-improved' => new Brokers\KafkaBrokerImproved($config, $this),
             'rabbitmq-improved' => new Brokers\RabbitMqBrokerImproved($config, $this),
 
+            // High-performance brokers (v3) - Maximum throughput with async queue, producer pool, batch consumer
+            'kafka-hp' => new Brokers\KafkaBrokerHighPerformance($config, $this),
+
             default => throw new \InvalidArgumentException(
                 "Unsupported broker driver: {$driver}. " .
-                    "Supported drivers: redis, kafka, rabbitmq (legacy) or redis-improved, kafka-improved, rabbitmq-improved (v2)"
+                    "Supported drivers: redis, kafka, rabbitmq (v1), redis-improved, kafka-improved, rabbitmq-improved (v2), kafka-hp (v3)"
             )
         };
     }
