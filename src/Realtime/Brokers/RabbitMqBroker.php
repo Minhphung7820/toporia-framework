@@ -15,9 +15,9 @@ use Toporia\Framework\Realtime\Exceptions\BrokerException;
 use Toporia\Framework\Realtime\{Message, Metrics\BrokerMetrics, RealtimeManager};
 
 /**
- * Class RabbitMqBrokerImproved
+ * Class RabbitMqBroker
  *
- * Improved RabbitMQ broker with channel pooling, better connection management, and reliability.
+ * RabbitMQ broker with channel pooling, better connection management, and reliability.
  *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework

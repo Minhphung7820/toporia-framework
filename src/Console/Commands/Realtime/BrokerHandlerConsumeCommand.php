@@ -13,7 +13,6 @@ use Toporia\Framework\Realtime\Contracts\{BrokerInterface, MessageInterface, Rea
 use Toporia\Framework\Realtime\Brokers\RedisBroker;
 use Toporia\Framework\Realtime\Brokers\RabbitMqBroker;
 use Toporia\Framework\Realtime\Brokers\KafkaBroker;
-use Toporia\Framework\Realtime\Brokers\KafkaBrokerImproved;
 use Toporia\Framework\Support\Accessors\Log;
 
 /**
@@ -320,7 +319,7 @@ final class BrokerHandlerConsumeCommand extends Command
 
     private function subscribeKafka(BrokerInterface $broker, string $channel, callable $callback): void
     {
-        if ($broker instanceof KafkaBroker || $broker instanceof KafkaBrokerImproved) {
+        if ($broker instanceof KafkaBroker) {
             $broker->subscribe($channel, $callback);
         }
     }

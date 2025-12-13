@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Toporia\Framework\Console\Commands\Realtime;
 
 use Toporia\Framework\Console\Command;
-use Toporia\Framework\Realtime\Brokers\KafkaBrokerHighPerformance;
+use Toporia\Framework\Realtime\Brokers\KafkaBroker;
 use Toporia\Framework\Realtime\Metrics\KafkaMetricsCollector;
 use Toporia\Framework\Realtime\RealtimeManager;
 
@@ -131,8 +131,8 @@ final class BrokerMetricsCommand extends Command
                 return null;
             }
 
-            // High-performance broker has built-in metrics
-            if ($broker instanceof KafkaBrokerHighPerformance) {
+            // Kafka broker has built-in metrics
+            if ($broker instanceof KafkaBroker) {
                 return json_decode($broker->getJsonMetrics(), true);
             }
 
@@ -252,7 +252,7 @@ final class BrokerMetricsCommand extends Command
                 $realtime = app(RealtimeManager::class);
                 $broker = $realtime->broker($driver);
 
-                if ($broker instanceof KafkaBrokerHighPerformance) {
+                if ($broker instanceof KafkaBroker) {
                     return $broker->getPrometheusMetrics();
                 }
             } catch (\Throwable) {

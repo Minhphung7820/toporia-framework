@@ -44,8 +44,8 @@ final class BrokerFactory
      */
     public static function create(string $driver, array $config, ?RealtimeManager $manager = null): BrokerInterface
     {
-        // Normalize driver name (support legacy -improved suffix for backward compatibility)
-        $normalizedDriver = str_replace('-improved', '', $driver);
+        // Normalize driver name (support legacy suffixes for backward compatibility)
+        $normalizedDriver = str_replace(['-improved', '-hp'], '', $driver);
 
         // Validate driver
         if (!in_array($normalizedDriver, self::SUPPORTED_DRIVERS, true)) {
@@ -191,7 +191,7 @@ final class BrokerFactory
      */
     public static function isSupported(string $driver): bool
     {
-        $normalizedDriver = str_replace('-improved', '', $driver);
+        $normalizedDriver = str_replace(['-improved', '-hp'], '', $driver);
         return in_array($normalizedDriver, self::SUPPORTED_DRIVERS, true);
     }
 

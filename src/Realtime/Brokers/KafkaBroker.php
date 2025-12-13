@@ -20,7 +20,7 @@ use Toporia\Framework\Realtime\Metrics\{BrokerMetrics, KafkaMetricsCollector};
 use Toporia\Framework\Realtime\{Message, RealtimeManager};
 
 /**
- * Class KafkaBrokerHighPerformance
+ * Class KafkaBroker
  *
  * High-performance Kafka broker optimized for maximum throughput.
  * Integrates: ProducerPool, AsyncQueue, BatchConsumer, DLQ, Metrics.
@@ -229,7 +229,7 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
         if (!extension_loaded('rdkafka')) {
             throw BrokerException::invalidConfiguration(
                 'kafka',
-                'rdkafka extension is required for KafkaBrokerHighPerformance. Install: pecl install rdkafka'
+                'rdkafka extension is required for KafkaBroker. Install: pecl install rdkafka'
             );
         }
 

@@ -14,9 +14,9 @@ use Toporia\Framework\Realtime\RealtimeManager;
 use Toporia\Framework\Realtime\Message;
 
 /**
- * Class RedisBrokerImproved
+ * Class RedisBroker
  *
- * Improved Redis Pub/Sub broker with connection pooling, circuit breaker,
+ * Redis Pub/Sub broker with connection pooling, circuit breaker,
  * auto-reconnect, and memory management.
  *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
