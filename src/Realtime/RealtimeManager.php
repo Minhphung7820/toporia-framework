@@ -535,23 +535,16 @@ final class RealtimeManager implements RealtimeManagerInterface
             $driver = $name; // Use the requested driver
         }
 
-        return match ($driver) {
-            // Legacy brokers (v1)
+        // Normalize driver name (backward compatibility)
+        $normalizedDriver = str_replace(['-improved', '-hp'], '', $driver);
+
+        return match ($normalizedDriver) {
             'redis' => new Brokers\RedisBroker($config, $this),
             'kafka' => new Brokers\KafkaBroker($config, $this),
             'rabbitmq' => new Brokers\RabbitMqBroker($config, $this),
 
-            // Improved brokers (v2) - Production-ready with connection pooling, circuit breaker, metrics
-            'redis-improved' => new Brokers\RedisBrokerImproved($config, $this),
-            'kafka-improved' => new Brokers\KafkaBrokerImproved($config, $this),
-            'rabbitmq-improved' => new Brokers\RabbitMqBrokerImproved($config, $this),
-
-            // High-performance brokers (v3) - Maximum throughput with async queue, producer pool, batch consumer
-            'kafka-hp' => new Brokers\KafkaBrokerHighPerformance($config, $this),
-
             default => throw new \InvalidArgumentException(
-                "Unsupported broker driver: {$driver}. " .
-                    "Supported drivers: redis, kafka, rabbitmq (v1), redis-improved, kafka-improved, rabbitmq-improved (v2), kafka-hp (v3)"
+                "Unsupported broker driver: {$driver}. Supported drivers: redis, kafka, rabbitmq"
             )
         };
     }
@@ -560,17 +553,21 @@ final class RealtimeManager implements RealtimeManagerInterface
      * Find broker config by driver name.
      *
      * Searches through all broker configs to find one that uses the specified driver.
-     * This allows calling broker('kafka-improved') when config has:
-     *   brokers['kafka']['driver'] = 'kafka-improved'
      *
      * @param string $driverName Driver name to search for
      * @return array<string, mixed> Config array or empty if not found
      */
     private function findConfigByDriver(string $driverName): array
     {
+        // Normalize driver name for comparison
+        $normalizedName = str_replace(['-improved', '-hp'], '', $driverName);
+
         foreach ($this->config['brokers'] ?? [] as $brokerConfig) {
-            if (isset($brokerConfig['driver']) && $brokerConfig['driver'] === $driverName) {
-                return $brokerConfig;
+            if (isset($brokerConfig['driver'])) {
+                $configDriver = str_replace(['-improved', '-hp'], '', $brokerConfig['driver']);
+                if ($configDriver === $normalizedName) {
+                    return $brokerConfig;
+                }
             }
         }
 

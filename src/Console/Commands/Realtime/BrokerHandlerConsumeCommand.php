@@ -282,10 +282,13 @@ final class BrokerHandlerConsumeCommand extends Command
             $this->handleMessage($message, $channel);
         };
 
-        match ($driver) {
+        // Normalize driver name
+        $normalizedDriver = str_replace(['-improved', '-hp'], '', $driver);
+
+        match ($normalizedDriver) {
             'redis' => $this->subscribeRedis($broker, $channel, $callback),
             'rabbitmq' => $this->subscribeRabbitMq($broker, $channel, $callback),
-            'kafka', 'kafka-improved' => $this->subscribeKafka($broker, $channel, $callback),
+            'kafka' => $this->subscribeKafka($broker, $channel, $callback),
             default => $broker->subscribe($channel, $callback),
         };
     }

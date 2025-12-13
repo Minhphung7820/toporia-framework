@@ -596,7 +596,7 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
      */
     public function getName(): string
     {
-        return 'rabbitmq-improved';
+        return 'rabbitmq';
     }
 
     /**

@@ -213,7 +213,9 @@ final class KafkaBrokerSubscriptionStrategy implements BrokerSubscriptionStrateg
      */
     public function supports(string $brokerName): bool
     {
-        return in_array($brokerName, ['kafka', 'kafka-improved'], true);
+        // Normalize broker name for comparison
+        $normalized = str_replace(['-improved', '-hp'], '', $brokerName);
+        return $normalized === 'kafka';
     }
 
     /**

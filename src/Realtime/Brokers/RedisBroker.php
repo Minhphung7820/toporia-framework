@@ -430,7 +430,7 @@ final class RedisBroker implements BrokerInterface, HealthCheckableInterface
      */
     public function getName(): string
     {
-        return 'redis-improved';
+        return 'redis';
     }
 
     /**
