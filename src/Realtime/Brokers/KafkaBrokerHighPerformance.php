@@ -13,6 +13,7 @@ use Toporia\Framework\Realtime\Brokers\Kafka\ProducerPool;
 use Toporia\Framework\Realtime\Brokers\Kafka\SharedMemoryQueue;
 use Toporia\Framework\Realtime\Brokers\Kafka\TopicStrategy\TopicStrategyFactory;
 use Toporia\Framework\Realtime\Consumer\Contracts\BatchConsumerHandlerInterface;
+use Toporia\Framework\Realtime\Consumer\Contracts\ConsumerContext;
 use Toporia\Framework\Realtime\Contracts\{BrokerInterface, HealthCheckableInterface, HealthCheckResult, MessageInterface, TopicStrategyInterface};
 use Toporia\Framework\Realtime\Exceptions\BrokerException;
 use Toporia\Framework\Realtime\Metrics\{BrokerMetrics, KafkaMetricsCollector};
@@ -532,10 +533,12 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
         $topic = $lastKafkaMessage->topic ?? 'unknown';
 
         try {
-            $context = new \Toporia\Framework\Realtime\Consumer\Contracts\ConsumerContext(
-                handlerName: $handler->getName(),
+            $context = new ConsumerContext(
                 driver: 'kafka-hp',
-                processId: getmypid() ?: 0
+                handlerName: $handler->getName(),
+                channel: $topic,
+                processId: getmypid() ?: 0,
+                startedAt: microtime(true)
             );
 
             $failed = $handler->handleBatch($messages, $context);
