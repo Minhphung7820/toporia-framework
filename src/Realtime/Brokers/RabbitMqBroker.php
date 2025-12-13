@@ -9,29 +9,36 @@ use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use Toporia\Framework\DateTime\Chronos;
+use Toporia\Framework\Realtime\Brokers\CircuitBreaker\CircuitBreaker;
 use Toporia\Framework\Realtime\Contracts\{BrokerInterface, HealthCheckableInterface, HealthCheckResult, MessageInterface};
-use Toporia\Framework\Realtime\Exceptions\{BrokerException, BrokerTemporaryException};
-use Toporia\Framework\Realtime\{Message, RealtimeManager};
+use Toporia\Framework\Realtime\Exceptions\BrokerException;
+use Toporia\Framework\Realtime\{Message, Metrics\BrokerMetrics, RealtimeManager};
 
 /**
- * Class RabbitMqBroker
+ * Class RabbitMqBrokerImproved
  *
- * Durable AMQP broker with topic exchange routing. Optimized for enterprise messaging with guaranteed delivery.
+ * Improved RabbitMQ broker with channel pooling, better connection management, and reliability.
  *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
- * @version     1.0.0
+ * @version     2.0.0
  * @package     toporia/framework
  * @subpackage  Realtime\Brokers
- * @since       2025-01-10
+ * @since       2025-12-10
  *
  * @link        https://github.com/Minhphung7820/toporia
  */
 final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
 {
     private ?AMQPStreamConnection $connection = null;
-    private ?AMQPChannel $channel = null;
+
+    /**
+     * @var array<AMQPChannel> Channel pool
+     */
+    private array $channelPool = [];
+
+    private int $currentChannelIndex = 0;
     private string $exchange;
     private string $exchangeType;
     private bool $persistentMessages;
@@ -39,6 +46,8 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
     private bool $consuming = false;
     private ?string $queueName = null;
     private bool $consumerInitialized = false;
+    private CircuitBreaker $circuitBreaker;
+    private MemoryManager $memoryManager;
 
     /** @var array<string, callable> */
     private array $subscriptions = [];
@@ -49,14 +58,11 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
     /** @var array<int, string> */
     private array $consumerTags = [];
 
-    /**
-     * Internal message counter for batch tracking.
-     * Used to track messages processed in current consume() call.
-     */
-    private int $batchMessageCount = 0;
+    private const DEFAULT_MAX_CHANNELS = 10;
 
     /**
      * @param array<string, mixed> $config
+     * @param RealtimeManager|null $manager
      */
     public function __construct(
         private array $config = [],
@@ -66,13 +72,43 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
         $this->exchangeType = $config['exchange_type'] ?? 'topic';
         $this->persistentMessages = (bool) ($config['persistent_messages'] ?? true);
 
+        $this->circuitBreaker = new CircuitBreaker(
+            name: 'rabbitmq-broker',
+            failureThreshold: $config['circuit_breaker_threshold'] ?? 5,
+            timeout: $config['circuit_breaker_timeout'] ?? 60
+        );
+
+        $this->memoryManager = new MemoryManager();
+
         $this->connect();
     }
 
     /**
-     * Establish AMQP connection & channel.
+     * Establish AMQP connection & channel pool.
+     *
+     * @return void
      */
     private function connect(): void
+    {
+        try {
+            $this->circuitBreaker->call(function () {
+                $this->doConnect();
+            });
+
+            $this->connected = true;
+            BrokerMetrics::recordConnectionEvent('rabbitmq', 'connect');
+        } catch (\Throwable $e) {
+            BrokerMetrics::recordConnectionEvent('rabbitmq', 'connect_failed');
+            throw BrokerException::connectionFailed('rabbitmq', $e->getMessage(), $e);
+        }
+    }
+
+    /**
+     * Perform actual connection.
+     *
+     * @return void
+     */
+    private function doConnect(): void
     {
         $host = $this->config['host'] ?? '127.0.0.1';
         $port = (int) ($this->config['port'] ?? 5672);
@@ -80,46 +116,160 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
         $password = $this->config['password'] ?? 'guest';
         $vhost = $this->config['vhost'] ?? '/';
 
-        try {
-            $this->connection = new AMQPStreamConnection($host, $port, $user, $password, $vhost);
-            $this->channel = $this->connection->channel();
-        } catch (\Throwable $e) {
-            throw BrokerException::connectionFailed('rabbitmq', "{$host}:{$port} - {$e->getMessage()}", $e);
-        }
+        $this->connection = new AMQPStreamConnection($host, $port, $user, $password, $vhost);
 
+        // Initialize channel pool
+        $this->initializeChannelPool();
+
+        // Declare exchange on first channel
         $durable = (bool) ($this->config['exchange_durable'] ?? true);
         $autoDelete = (bool) ($this->config['exchange_auto_delete'] ?? false);
 
-        try {
-            $this->channel->exchange_declare(
-                $this->exchange,
-                $this->exchangeType,
-                false,
-                $durable,
-                $autoDelete
-            );
-        } catch (\Throwable $e) {
-            throw BrokerException::connectionFailed('rabbitmq', "Exchange declare failed: {$e->getMessage()}", $e);
-        }
-
-        $prefetch = (int) ($this->config['prefetch_count'] ?? 50);
-        if ($prefetch > 0) {
-            $this->channel->basic_qos(null, $prefetch, null);
-        }
-
-        $this->connected = true;
+        $this->channelPool[0]->exchange_declare(
+            $this->exchange,
+            $this->exchangeType,
+            false,
+            $durable,
+            $autoDelete
+        );
     }
 
+    /**
+     * Initialize channel pool.
+     *
+     * @return void
+     */
+    private function initializeChannelPool(): void
+    {
+        $maxChannels = (int) ($this->config['max_channels'] ?? self::DEFAULT_MAX_CHANNELS);
+        $prefetch = (int) ($this->config['prefetch_count'] ?? 50);
+
+        $this->channelPool = [];
+
+        for ($i = 0; $i < $maxChannels; $i++) {
+            $channel = $this->connection->channel();
+            $channel->basic_qos(null, $prefetch, null);
+            $this->channelPool[] = $channel;
+        }
+    }
+
+    /**
+     * Get channel from pool (round-robin).
+     *
+     * @return AMQPChannel
+     */
+    private function getChannel(): AMQPChannel
+    {
+        if (empty($this->channelPool)) {
+            throw new \RuntimeException('Channel pool is empty');
+        }
+
+        // Round-robin channel selection
+        $this->currentChannelIndex = ($this->currentChannelIndex + 1) % count($this->channelPool);
+        $channel = $this->channelPool[$this->currentChannelIndex];
+
+        // Check if channel is open, recreate if not
+        if (!$channel->is_open()) {
+            $prefetch = (int) ($this->config['prefetch_count'] ?? 50);
+            $channel = $this->connection->channel();
+            $channel->basic_qos(null, $prefetch, null);
+            $this->channelPool[$this->currentChannelIndex] = $channel;
+        }
+
+        return $channel;
+    }
+
+    /**
+     * Ensure connection is alive.
+     *
+     * @return void
+     */
     private function ensureConnection(): void
     {
-        if ($this->connected && $this->connection?->isConnected()) {
-            return;
+        try {
+            if ($this->connected && $this->connection !== null && $this->connection->isConnected()) {
+                return; // Connection is good
+            }
+        } catch (\Throwable) {
+            // isConnected() failed, need to reconnect
         }
 
-        $this->disconnect();
-        $this->connect();
+        // Reconnect with retry
+        $this->reconnect();
     }
 
+    /**
+     * Reconnect with exponential backoff.
+     *
+     * @return void
+     */
+    private function reconnect(): void
+    {
+        $maxRetries = 3;
+        $retryCount = 0;
+
+        // Forcefully cleanup old connection
+        $this->forceDisconnect();
+
+        while ($retryCount < $maxRetries) {
+            try {
+                $this->connect();
+                BrokerMetrics::recordConnectionEvent('rabbitmq', 'reconnect');
+                return;
+            } catch (\Throwable $e) {
+                $retryCount++;
+                if ($retryCount >= $maxRetries) {
+                    throw BrokerException::connectionFailed(
+                        'rabbitmq',
+                        "Failed after {$maxRetries} retries: {$e->getMessage()}",
+                        $e
+                    );
+                }
+
+                $delay = (int) pow(2, $retryCount);
+                error_log("RabbitMQ reconnect failed (retry {$retryCount}/{$maxRetries}). Wait {$delay}s");
+                sleep($delay);
+            }
+        }
+    }
+
+    /**
+     * Force disconnect and cleanup all resources.
+     *
+     * @return void
+     */
+    private function forceDisconnect(): void
+    {
+        // Close all channels in pool
+        foreach ($this->channelPool as $channel) {
+            try {
+                if ($channel->is_open()) {
+                    $channel->close();
+                }
+            } catch (\Throwable) {
+                // Ignore
+            }
+        }
+        $this->channelPool = [];
+
+        // Close connection
+        if ($this->connection !== null) {
+            try {
+                if ($this->connection->isConnected()) {
+                    $this->connection->close();
+                }
+            } catch (\Throwable) {
+                // Ignore
+            }
+            $this->connection = null;
+        }
+
+        $this->connected = false;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function publish(string $channel, MessageInterface $message): void
     {
         $this->ensureConnection();
@@ -133,13 +283,27 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
             'timestamp' => Chronos::now()->getTimestamp(),
         ]);
 
+        $startTime = microtime(true);
+
         try {
-            $this->channel?->basic_publish($msg, $this->exchange, $routingKey);
+            $this->circuitBreaker->call(function () use ($msg, $routingKey) {
+                $publishChannel = $this->getChannel();
+                $publishChannel->basic_publish($msg, $this->exchange, $routingKey);
+            });
+
+            $duration = (microtime(true) - $startTime) * 1000;
+            BrokerMetrics::recordPublish('rabbitmq', $channel, $duration, true);
         } catch (\Throwable $e) {
+            $duration = (microtime(true) - $startTime) * 1000;
+            BrokerMetrics::recordPublish('rabbitmq', $channel, $duration, false);
+            BrokerMetrics::recordError('rabbitmq', 'publish');
             throw BrokerException::publishFailed('rabbitmq', $channel, $e->getMessage(), $e);
         }
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function subscribe(string $channel, callable $callback): void
     {
         $this->ensureConnection();
@@ -147,75 +311,39 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
         $routingKey = $this->formatRoutingKey($channel);
         $queue = $this->getQueueName();
 
-        $this->channel?->queue_bind($queue, $this->exchange, $routingKey);
+        $subscribeChannel = $this->getChannel();
+        $subscribeChannel->queue_bind($queue, $this->exchange, $routingKey);
+
         $this->subscriptions[$channel] = $callback;
         $this->routingMap[$routingKey] = $channel;
     }
 
     /**
-     * Subscribe using a routing key pattern.
+     * Consume messages from RabbitMQ queue with health monitoring.
      *
-     * RabbitMQ topic exchange supports wildcards:
-     * - '#' matches zero or more words (e.g., 'realtime.#' matches all realtime channels)
-     * - '*' matches exactly one word (e.g., 'realtime.user.*' matches realtime.user.1, realtime.user.2)
-     *
-     * @param string $routingKeyPattern Routing key pattern (e.g., '#' for all, 'user.*' for user channels)
-     * @param callable $callback Callback receives (MessageInterface $message, string $channel)
+     * @param int $timeoutMs Poll timeout in milliseconds
+     * @param int $batchSize Maximum messages per batch
      * @return void
-     */
-    public function subscribeWithRoutingKey(string $routingKeyPattern, callable $callback): void
-    {
-        $this->ensureConnection();
-
-        // Format routing key (add prefix if needed)
-        $formattedKey = $this->formatRoutingKey($routingKeyPattern);
-        $queue = $this->getQueueName();
-
-        // Bind queue with pattern
-        $this->channel?->queue_bind($queue, $this->exchange, $formattedKey);
-
-        // Store subscription with pattern key
-        $this->subscriptions['__pattern__' . $routingKeyPattern] = $callback;
-        $this->routingMap[$formattedKey] = '__pattern__' . $routingKeyPattern;
-    }
-
-    /**
-     * Consume messages from RabbitMQ queue.
-     *
-     * Optimized for high-throughput production workloads:
-     * - Uses prefetch (QoS) for efficient batch fetching from broker
-     * - Non-blocking wait with adaptive timeout for low latency
-     * - Batch counter tracked via callback to avoid wait() counting issues
-     * - Returns control periodically for heartbeat/signal handling
-     *
-     * Performance characteristics:
-     * - Throughput: 10,000+ msg/s with prefetch=100
-     * - Latency: <10ms for message processing
-     * - Memory: O(prefetch) for buffered messages
-     *
-     * @param int $timeoutMs Max time to spend in this call (default 1000ms)
-     * @param int $batchSize Max messages before returning (default 100)
      */
     public function consume(int $timeoutMs = 1000, int $batchSize = 100): void
     {
-        if (empty($this->subscriptions) || !$this->channel) {
+        if (empty($this->subscriptions)) {
             return;
         }
 
         $this->consuming = true;
+        $consumeChannel = $this->getChannel();
 
-        // Initialize consumer only once (lazy initialization)
         if (!$this->consumerInitialized) {
-            $tag = $this->channel->basic_consume(
+            $tag = $consumeChannel->basic_consume(
                 $this->getQueueName(),
-                '',      // consumer_tag (auto-generated)
-                false,   // no_local
-                false,   // no_ack - manual ack for reliability
-                false,   // exclusive
-                false,   // nowait
+                '',
+                false,
+                false,
+                false,
+                false,
                 function (AMQPMessage $message) {
                     $this->handleIncomingMessage($message);
-                    $this->batchMessageCount++;
                 }
             );
 
@@ -226,79 +354,179 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
             $this->consumerInitialized = true;
         }
 
-        // Reset batch counter for this consume cycle
-        $this->batchMessageCount = 0;
+        $timeoutSeconds = max($timeoutMs, 1000) / 1000;
+        $lastHealthCheck = time();
+        $healthCheckInterval = 60;
 
-        // Calculate deadline for this consume cycle
-        $deadline = microtime(true) + ($timeoutMs / 1000);
+        try {
+            while ($this->consuming && $consumeChannel->is_consuming()) {
+                try {
+                    $consumeChannel->wait(null, false, $timeoutSeconds);
 
-        // Use short initial wait for fast response when messages available
-        // Increases efficiency by reducing syscall overhead
-        $waitTimeout = min(0.1, $timeoutMs / 1000);
+                    // Periodic health check
+                    $now = time();
+                    if ($now - $lastHealthCheck > $healthCheckInterval) {
+                        $this->performHealthCheck();
+                        $lastHealthCheck = $now;
+                    }
+                } catch (AMQPTimeoutException) {
+                    // Normal timeout - check health
+                    $now = time();
+                    if ($now - $lastHealthCheck > $healthCheckInterval) {
+                        $this->performHealthCheck();
+                        $lastHealthCheck = $now;
+                    }
+                    continue;
+                } catch (\Throwable $e) {
+                    error_log("RabbitMQ consume error: {$e->getMessage()}");
+                    BrokerMetrics::recordError('rabbitmq', 'consume');
 
-        // Process messages until batch limit or time budget exhausted
-        while ($this->consuming && $this->batchMessageCount < $batchSize) {
-            // Check remaining time budget
-            $remainingTime = $deadline - microtime(true);
-            if ($remainingTime <= 0) {
-                return;
+                    // Try to recover
+                    try {
+                        $this->ensureConnection();
+                        $this->setupConsumer();
+                    } catch (\Throwable $reconnectError) {
+                        error_log("RabbitMQ reconnect failed: {$reconnectError->getMessage()}");
+                        throw $e;
+                    }
+                }
             }
-
-            try {
-                // Non-blocking wait with adaptive timeout
-                // Uses min of configured wait and remaining time
-                $this->channel->wait(null, true, min($waitTimeout, max(0.01, $remainingTime)));
-            } catch (AMQPTimeoutException) {
-                // No message within timeout - return control to caller
-                return;
-            }
+        } finally {
+            $this->stopConsuming();
         }
     }
 
+    /**
+     * Perform health check.
+     *
+     * @return void
+     * @throws \RuntimeException If health check fails
+     */
+    private function performHealthCheck(): void
+    {
+        if (!$this->connection || !$this->connection->isConnected()) {
+            throw new \RuntimeException('RabbitMQ connection lost');
+        }
+
+        // Check at least one channel is open
+        $hasOpenChannel = false;
+        foreach ($this->channelPool as $channel) {
+            if ($channel->is_open()) {
+                $hasOpenChannel = true;
+                break;
+            }
+        }
+
+        if (!$hasOpenChannel) {
+            throw new \RuntimeException('All RabbitMQ channels are closed');
+        }
+    }
+
+    /**
+     * Setup consumer after reconnection.
+     *
+     * @return void
+     */
+    private function setupConsumer(): void
+    {
+        $this->consumerInitialized = false;
+        $this->consumerTags = [];
+
+        // Re-subscribe to all channels
+        $tempSubscriptions = $this->subscriptions;
+        $this->subscriptions = [];
+
+        foreach ($tempSubscriptions as $channel => $callback) {
+            $this->subscribe($channel, $callback);
+        }
+    }
+
+    /**
+     * Handle incoming message with safe ACK/NACK.
+     *
+     * @param AMQPMessage $message
+     * @return void
+     */
     private function handleIncomingMessage(AMQPMessage $message): void
     {
+        // Memory management
+        $this->memoryManager->tick();
+
         $routingKey = $message->getRoutingKey();
         $channelName = $this->routingMap[$routingKey] ?? $routingKey;
         $callback = $this->subscriptions[$channelName] ?? null;
 
-        // If no direct match, check for pattern subscriptions
         if (!$callback) {
-            foreach ($this->subscriptions as $key => $cb) {
-                if (str_starts_with($key, '__pattern__')) {
-                    $callback = $cb;
-                    break;
-                }
-            }
-        }
-
-        if (!$callback) {
-            $message->ack();
+            $this->safeAck($message);
             return;
         }
+
+        $startTime = microtime(true);
 
         try {
             $decoded = Message::fromJson($message->getBody());
             $callback($decoded);
-            $message->ack();
+            $this->safeAck($message);
+
+            $duration = (microtime(true) - $startTime) * 1000;
+            BrokerMetrics::recordConsume('rabbitmq', 1, $duration);
         } catch (\Throwable $e) {
-            $message->nack(true);
+            $duration = (microtime(true) - $startTime) * 1000;
+            BrokerMetrics::recordConsume('rabbitmq', 0, $duration);
+            BrokerMetrics::recordError('rabbitmq', 'process_message');
+
             error_log("RabbitMQ consumer error on {$routingKey}: {$e->getMessage()}");
+            $this->safeNack($message, true); // Requeue
         }
     }
 
+    /**
+     * Safe message acknowledgment.
+     *
+     * @param AMQPMessage $message
+     * @return void
+     */
+    private function safeAck(AMQPMessage $message): void
+    {
+        try {
+            $message->ack();
+        } catch (\Throwable $e) {
+            error_log("WARNING: Failed to ACK message: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Safe message negative acknowledgment.
+     *
+     * @param AMQPMessage $message
+     * @param bool $requeue
+     * @return void
+     */
+    private function safeNack(AMQPMessage $message, bool $requeue): void
+    {
+        try {
+            $message->nack($requeue);
+        } catch (\Throwable $e) {
+            error_log("WARNING: Failed to NACK message: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * {@inheritdoc}
+     */
     public function stopConsuming(): void
     {
         $this->consuming = false;
 
-        if (!$this->channel) {
-            return;
-        }
-
         foreach ($this->consumerTags as $tag) {
-            try {
-                $this->channel->basic_cancel($tag);
-            } catch (\Throwable $e) {
-                error_log("RabbitMQ cancel error: {$e->getMessage()}");
+            foreach ($this->channelPool as $channel) {
+                try {
+                    if ($channel->is_open()) {
+                        $channel->basic_cancel($tag);
+                    }
+                } catch (\Throwable $e) {
+                    error_log("RabbitMQ cancel error: {$e->getMessage()}");
+                }
             }
         }
 
@@ -306,65 +534,76 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
         $this->consumerInitialized = false;
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function unsubscribe(string $channel): void
     {
-        if (!isset($this->subscriptions[$channel]) || !$this->channel) {
+        if (!isset($this->subscriptions[$channel])) {
             return;
         }
 
         $routingKey = $this->formatRoutingKey($channel);
-        $this->channel->queue_unbind($this->getQueueName(), $this->exchange, $routingKey);
+
+        $unbindChannel = $this->getChannel();
+        $unbindChannel->queue_unbind($this->getQueueName(), $this->exchange, $routingKey);
 
         unset($this->subscriptions[$channel], $this->routingMap[$routingKey]);
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function getSubscriberCount(string $channel): int
     {
-        if (!$this->channel || $this->queueName === null) {
+        if ($this->queueName === null) {
             return 0;
         }
 
         try {
-            [$queue,, $consumerCount] = $this->channel->queue_declare($this->queueName, true);
+            $checkChannel = $this->getChannel();
+            [$queue,, $consumerCount] = $checkChannel->queue_declare($this->queueName, true);
             return (int) $consumerCount;
         } catch (\Throwable) {
             return 0;
         }
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function isConnected(): bool
     {
         return $this->connected && $this->connection?->isConnected();
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function disconnect(): void
     {
         $this->stopConsuming();
+        $this->forceDisconnect();
 
-        try {
-            $this->channel?->close();
-        } catch (\Throwable $e) {
-            error_log("RabbitMQ channel close error: {$e->getMessage()}");
-        }
-
-        try {
-            $this->connection?->close();
-        } catch (\Throwable $e) {
-            error_log("RabbitMQ connection close error: {$e->getMessage()}");
-        }
-
-        $this->channel = null;
-        $this->connection = null;
-        $this->connected = false;
         $this->queueName = null;
         $this->consumerInitialized = false;
+
+        BrokerMetrics::recordConnectionEvent('rabbitmq', 'disconnect');
     }
 
+    /**
+     * {@inheritdoc}
+     */
     public function getName(): string
     {
-        return 'rabbitmq';
+        return 'rabbitmq-improved';
     }
 
+    /**
+     * Get or create queue name.
+     *
+     * @return string
+     */
     private function getQueueName(): string
     {
         if ($this->queueName !== null) {
@@ -376,31 +615,24 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
         $autoDelete = (bool) ($this->config['queue_auto_delete'] ?? true);
         $queuePrefix = $this->config['queue_prefix'] ?? 'realtime';
 
-        // Generate unique queue name for containers
-        // Use multiple sources to ensure uniqueness:
-        // - HOSTNAME env var (Kubernetes/Docker)
-        // - gethostname() (fallback)
-        // - Random suffix for additional uniqueness on restarts
         $hostname = $_ENV['HOSTNAME'] ?? getenv('HOSTNAME') ?: (gethostname() ?: 'app');
-        $uniqueSuffix = bin2hex(random_bytes(4)); // 8 char random suffix
+        $uniqueSuffix = bin2hex(random_bytes(4));
 
-        $queueName = $exclusive ? '' : sprintf(
-            '%s.%s.%s',
-            $queuePrefix,
-            $hostname,
-            $uniqueSuffix
-        );
+        $queueName = $exclusive ? '' : sprintf('%s.%s.%s', $queuePrefix, $hostname, $uniqueSuffix);
 
-        try {
-            [$queue] = $this->channel->queue_declare($queueName, false, $durable, $exclusive, $autoDelete);
-            $this->queueName = $queue;
-        } catch (\Throwable $e) {
-            throw BrokerException::connectionFailed('rabbitmq', "Queue declare failed: {$e->getMessage()}", $e);
-        }
+        $declareChannel = $this->getChannel();
+        [$queue] = $declareChannel->queue_declare($queueName, false, $durable, $exclusive, $autoDelete);
+        $this->queueName = $queue;
 
         return $this->queueName;
     }
 
+    /**
+     * Format routing key from channel name.
+     *
+     * @param string $channel
+     * @return string
+     */
     private function formatRoutingKey(string $channel): string
     {
         return str_replace(':', '.', $channel);
@@ -418,17 +650,15 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
         $start = microtime(true);
 
         try {
-            // Check if connection is alive
             if (!$this->connection->isConnected()) {
                 return HealthCheckResult::unhealthy('RabbitMQ connection lost');
             }
 
-            // Check channel
-            if ($this->channel === null || !$this->channel->is_open()) {
-                return HealthCheckResult::degraded(
-                    message: 'RabbitMQ channel is closed',
-                    details: ['connection_alive' => true]
-                );
+            $openChannels = 0;
+            foreach ($this->channelPool as $channel) {
+                if ($channel->is_open()) {
+                    $openChannels++;
+                }
             }
 
             $latencyMs = (microtime(true) - $start) * 1000;
@@ -440,6 +670,11 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
                     'exchange_type' => $this->exchangeType,
                     'queue' => $this->queueName,
                     'subscriptions' => count($this->subscriptions),
+                    'channel_pool_size' => count($this->channelPool),
+                    'open_channels' => $openChannels,
+                    'circuit_breaker' => $this->circuitBreaker->getState()->value,
+                    'memory_stats' => $this->memoryManager->getStats(),
+                    'metrics' => BrokerMetrics::getMetrics('rabbitmq'),
                 ],
                 latencyMs: $latencyMs
             );
@@ -456,7 +691,27 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
      */
     public function getHealthCheckName(): string
     {
-        return 'rabbitmq-broker';
+        return 'rabbitmq-broker-improved';
+    }
+
+    /**
+     * Get circuit breaker instance.
+     *
+     * @return CircuitBreaker
+     */
+    public function getCircuitBreaker(): CircuitBreaker
+    {
+        return $this->circuitBreaker;
+    }
+
+    /**
+     * Get memory manager instance.
+     *
+     * @return MemoryManager
+     */
+    public function getMemoryManager(): MemoryManager
+    {
+        return $this->memoryManager;
     }
 
     public function __destruct()

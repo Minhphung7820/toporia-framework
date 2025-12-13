@@ -10,12 +10,12 @@ use Toporia\Framework\Realtime\RealtimeManager;
 /**
  * Class BrokerFactory
  *
- * Factory for creating broker instances with validation and optimization.
+ * Factory for creating broker instances with validation.
  *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
- * @version     2.0.0
+ * @version     3.0.0
  * @package     toporia/framework
  * @subpackage  Realtime\Brokers
  * @since       2025-12-10
@@ -28,24 +28,9 @@ final class BrokerFactory
      * Supported broker drivers.
      */
     private const SUPPORTED_DRIVERS = [
-        // Legacy (v1)
         'redis',
         'kafka',
         'rabbitmq',
-
-        // Improved (v2)
-        'redis-improved',
-        'kafka-improved',
-        'rabbitmq-improved',
-    ];
-
-    /**
-     * Recommended drivers for production.
-     */
-    private const RECOMMENDED_DRIVERS = [
-        'redis-improved',
-        'kafka-improved',
-        'rabbitmq-improved',
     ];
 
     /**
@@ -59,8 +44,11 @@ final class BrokerFactory
      */
     public static function create(string $driver, array $config, ?RealtimeManager $manager = null): BrokerInterface
     {
+        // Normalize driver name (support legacy -improved suffix for backward compatibility)
+        $normalizedDriver = str_replace('-improved', '', $driver);
+
         // Validate driver
-        if (!in_array($driver, self::SUPPORTED_DRIVERS, true)) {
+        if (!in_array($normalizedDriver, self::SUPPORTED_DRIVERS, true)) {
             throw new \InvalidArgumentException(
                 "Unsupported broker driver: {$driver}. " .
                     "Supported: " . implode(', ', self::SUPPORTED_DRIVERS)
@@ -68,27 +56,13 @@ final class BrokerFactory
         }
 
         // Validate configuration
-        self::validateConfig($driver, $config);
-
-        // Warn if using legacy driver in production
-        if (!in_array($driver, self::RECOMMENDED_DRIVERS, true) && self::isProduction()) {
-            error_log(
-                "WARNING: Using legacy broker driver '{$driver}' in production. " .
-                    "Consider upgrading to '{$driver}-improved' for better performance, reliability, and observability."
-            );
-        }
+        self::validateConfig($normalizedDriver, $config);
 
         // Create broker instance
-        return match ($driver) {
-            // Legacy brokers (v1)
+        return match ($normalizedDriver) {
             'redis' => new RedisBroker($config, $manager),
             'kafka' => new KafkaBroker($config, $manager),
             'rabbitmq' => new RabbitMqBroker($config, $manager),
-
-            // Improved brokers (v2) - Production-ready
-            'redis-improved' => new RedisBrokerImproved($config, $manager),
-            'kafka-improved' => new KafkaBrokerImproved($config, $manager),
-            'rabbitmq-improved' => new RabbitMqBrokerImproved($config, $manager),
         };
     }
 
@@ -102,19 +76,12 @@ final class BrokerFactory
      */
     private static function validateConfig(string $driver, array $config): void
     {
-        // Common validations
-        if (str_contains($driver, 'redis')) {
-            self::validateRedisConfig($config);
-        } elseif (str_contains($driver, 'kafka')) {
-            self::validateKafkaConfig($config);
-        } elseif (str_contains($driver, 'rabbitmq')) {
-            self::validateRabbitMqConfig($config);
-        }
-
-        // Improved brokers specific validations
-        if (str_ends_with($driver, '-improved')) {
-            self::validateImprovedConfig($config);
-        }
+        match ($driver) {
+            'redis' => self::validateRedisConfig($config),
+            'kafka' => self::validateKafkaConfig($config),
+            'rabbitmq' => self::validateRabbitMqConfig($config),
+            default => null,
+        };
     }
 
     /**
@@ -207,72 +174,25 @@ final class BrokerFactory
     }
 
     /**
-     * Validate improved broker configuration.
+     * Get supported drivers.
      *
-     * @param array<string, mixed> $config
-     * @return void
-     * @throws \InvalidArgumentException
+     * @return array<string>
      */
-    private static function validateImprovedConfig(array $config): void
+    public static function getSupportedDrivers(): array
     {
-        // Validate circuit breaker settings
-        $threshold = $config['circuit_breaker_threshold'] ?? null;
-        if ($threshold !== null && $threshold < 1) {
-            throw new \InvalidArgumentException('circuit_breaker_threshold must be positive integer');
-        }
-
-        $timeout = $config['circuit_breaker_timeout'] ?? null;
-        if ($timeout !== null && $timeout < 1) {
-            throw new \InvalidArgumentException('circuit_breaker_timeout must be positive integer');
-        }
-
-        // Validate channel pool for RabbitMQ
-        $maxChannels = $config['max_channels'] ?? null;
-        if ($maxChannels !== null && $maxChannels < 1) {
-            throw new \InvalidArgumentException('max_channels must be positive integer');
-        }
-
-        if ($maxChannels !== null && $maxChannels > 100) {
-            error_log('WARNING: max_channels > 100 may cause resource exhaustion. Recommended: 10-20');
-        }
+        return self::SUPPORTED_DRIVERS;
     }
 
     /**
-     * Check if running in production environment.
-     *
-     * @return bool
-     */
-    private static function isProduction(): bool
-    {
-        $env = $_ENV['APP_ENV'] ?? getenv('APP_ENV') ?: 'production';
-        return in_array(strtolower($env), ['production', 'prod'], true);
-    }
-
-    /**
-     * Get recommended driver for broker type.
-     *
-     * @param string $type Broker type (redis, kafka, rabbitmq)
-     * @return string Recommended driver
-     */
-    public static function getRecommendedDriver(string $type): string
-    {
-        return match (strtolower($type)) {
-            'redis' => 'redis-improved',
-            'kafka' => 'kafka-improved',
-            'rabbitmq' => 'rabbitmq-improved',
-            default => throw new \InvalidArgumentException("Unknown broker type: {$type}")
-        };
-    }
-
-    /**
-     * Check if driver is improved version.
+     * Check if driver is supported.
      *
      * @param string $driver Driver name
      * @return bool
      */
-    public static function isImprovedDriver(string $driver): bool
+    public static function isSupported(string $driver): bool
     {
-        return str_ends_with($driver, '-improved');
+        $normalizedDriver = str_replace('-improved', '', $driver);
+        return in_array($normalizedDriver, self::SUPPORTED_DRIVERS, true);
     }
 
     /**
@@ -283,16 +203,16 @@ final class BrokerFactory
      */
     public static function getCapabilities(string $driver): array
     {
-        $isImproved = self::isImprovedDriver($driver);
-
         return [
-            'connection_pooling' => $isImproved,
-            'circuit_breaker' => $isImproved,
-            'auto_reconnect' => $isImproved,
-            'metrics' => $isImproved,
-            'memory_management' => $isImproved,
-            'backpressure' => $isImproved && str_contains($driver, 'kafka'),
-            'channel_pooling' => $isImproved && str_contains($driver, 'rabbitmq'),
+            'connection_pooling' => true,
+            'circuit_breaker' => true,
+            'auto_reconnect' => true,
+            'metrics' => true,
+            'memory_management' => true,
+            'backpressure' => str_contains($driver, 'kafka'),
+            'channel_pooling' => str_contains($driver, 'rabbitmq'),
+            'shared_memory_queue' => str_contains($driver, 'kafka'),
+            'batch_processing' => true,
         ];
     }
 }
