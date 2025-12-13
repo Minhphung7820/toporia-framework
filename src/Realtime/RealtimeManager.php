@@ -516,13 +516,24 @@ final class RealtimeManager implements RealtimeManagerInterface
     /**
      * Create broker instance.
      *
-     * @param string $name Broker name
+     * Supports both:
+     * - Direct broker name: broker('kafka') → uses brokers['kafka'] config
+     * - Driver alias: broker('kafka-improved') → finds broker with driver='kafka-improved'
+     *
+     * @param string $name Broker name or driver alias
      * @return BrokerInterface
      */
     private function createBroker(string $name): BrokerInterface
     {
         $config = $this->config['brokers'][$name] ?? [];
         $driver = $config['driver'] ?? $name;
+
+        // If config is empty and name looks like a driver alias,
+        // try to find the broker that uses this driver
+        if (empty($config) && str_contains($name, '-')) {
+            $config = $this->findConfigByDriver($name);
+            $driver = $name; // Use the requested driver
+        }
 
         return match ($driver) {
             // Legacy brokers (v1)
@@ -540,6 +551,27 @@ final class RealtimeManager implements RealtimeManagerInterface
                     "Supported drivers: redis, kafka, rabbitmq (legacy) or redis-improved, kafka-improved, rabbitmq-improved (v2)"
             )
         };
+    }
+
+    /**
+     * Find broker config by driver name.
+     *
+     * Searches through all broker configs to find one that uses the specified driver.
+     * This allows calling broker('kafka-improved') when config has:
+     *   brokers['kafka']['driver'] = 'kafka-improved'
+     *
+     * @param string $driverName Driver name to search for
+     * @return array<string, mixed> Config array or empty if not found
+     */
+    private function findConfigByDriver(string $driverName): array
+    {
+        foreach ($this->config['brokers'] ?? [] as $brokerConfig) {
+            if (isset($brokerConfig['driver']) && $brokerConfig['driver'] === $driverName) {
+                return $brokerConfig;
+            }
+        }
+
+        return [];
     }
 
     /**

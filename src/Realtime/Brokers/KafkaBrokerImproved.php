@@ -40,6 +40,11 @@ final class KafkaBrokerImproved implements BrokerInterface, HealthCheckableInter
     private array $subscriptions = [];
 
     /**
+     * @var array<string, callable> Wildcard pattern subscriptions [pattern => callback]
+     */
+    private array $wildcardSubscriptions = [];
+
+    /**
      * @var array<string, array{partition: int, cached_at: int}> Partition cache with TTL [topic:channel => {partition, cached_at}]
      */
     private array $partitionCache = [];
@@ -180,7 +185,9 @@ final class KafkaBrokerImproved implements BrokerInterface, HealthCheckableInter
         }
 
         $topicName = $this->getTopicName($channel);
-        $partition = $this->getPartition($channel, $topicName);
+        // Use null partition to let Kafka auto-assign based on message key
+        // This avoids "Unknown partition" errors when calculated partition exceeds actual partition count
+        $partition = null; // RD_KAFKA_PARTITION_UA - Kafka will use key-based partitioning
         $key = $this->getMessageKey($channel);
         $payload = $message->toJson();
 
@@ -221,6 +228,11 @@ final class KafkaBrokerImproved implements BrokerInterface, HealthCheckableInter
             $this->subscriptions[$topicName] = [];
         }
         $this->subscriptions[$topicName][$channel] = $callback;
+
+        // Store wildcard pattern for pattern matching
+        if (str_contains($channel, '*')) {
+            $this->wildcardSubscriptions[$channel] = $callback;
+        }
     }
 
     /**
@@ -275,7 +287,7 @@ final class KafkaBrokerImproved implements BrokerInterface, HealthCheckableInter
         }
 
         $subscriptions = $this->subscriptions[$topicName] ?? null;
-        if (!$subscriptions) {
+        if (!$subscriptions && empty($this->wildcardSubscriptions)) {
             return true;
         }
 
@@ -283,21 +295,18 @@ final class KafkaBrokerImproved implements BrokerInterface, HealthCheckableInter
 
         try {
             $message = Message::fromJson($payload);
-            $channel = $messageKey ?? $this->extractChannelFromTopic($topicName);
 
-            // Find and execute callback
-            $callback = $subscriptions[$channel] ?? null;
+            // Channel from message key (most reliable) or message data
+            $channel = $messageKey ?? $message->getChannel() ?? $this->extractChannelFromTopic($topicName);
+
+            // Find and execute callback with priority:
+            // 1. Exact channel match in subscriptions
+            // 2. Wildcard pattern match
+            // 3. First available callback (fallback)
+            $callback = $this->findCallback($subscriptions, $channel);
 
             if ($callback !== null) {
                 $callback($message);
-            } else {
-                // Fallback: execute first available callback
-                foreach ($subscriptions as $cb) {
-                    if (is_callable($cb)) {
-                        $cb($message);
-                        break;
-                    }
-                }
             }
 
             // Commit offset after successful processing
@@ -317,6 +326,65 @@ final class KafkaBrokerImproved implements BrokerInterface, HealthCheckableInter
         }
 
         return true;
+    }
+
+    /**
+     * Find callback for a channel with wildcard matching support.
+     *
+     * @param array<string, callable>|null $subscriptions Topic subscriptions
+     * @param string $channel Channel name from message
+     * @return callable|null
+     */
+    private function findCallback(?array $subscriptions, string $channel): ?callable
+    {
+        // 1. Exact match in topic subscriptions
+        if ($subscriptions !== null && isset($subscriptions[$channel])) {
+            return $subscriptions[$channel];
+        }
+
+        // 2. Wildcard pattern match
+        foreach ($this->wildcardSubscriptions as $pattern => $callback) {
+            if ($this->matchesWildcard($channel, $pattern)) {
+                return $callback;
+            }
+        }
+
+        // 3. Fallback: first available callback in subscriptions
+        if ($subscriptions !== null) {
+            foreach ($subscriptions as $cb) {
+                if (is_callable($cb)) {
+                    return $cb;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if channel matches wildcard pattern.
+     *
+     * Supports patterns like:
+     * - 'events.*' matches 'events.stream', 'events.login' (single segment)
+     * - 'events.**' matches 'events.stream.nested' (any depth)
+     * - 'user.*.notifications' matches 'user.123.notifications'
+     *
+     * @param string $channel Channel name
+     * @param string $pattern Wildcard pattern
+     * @return bool
+     */
+    private function matchesWildcard(string $channel, string $pattern): bool
+    {
+        // Handle '**' (match any depth) vs '*' (match single segment)
+        $regex = preg_quote($pattern, '/');
+
+        // '**' matches any characters including dots (any depth)
+        $regex = str_replace('\\*\\*', '.*', $regex);
+
+        // '*' matches only non-dot characters (single segment)
+        $regex = str_replace('\\*', '[^.]+', $regex);
+
+        return (bool) preg_match("/^{$regex}$/", $channel);
     }
 
     /**
@@ -410,6 +478,10 @@ final class KafkaBrokerImproved implements BrokerInterface, HealthCheckableInter
 
     /**
      * Get partition number for a channel with TTL-based caching.
+     *
+     * Note: Currently unused - we let Kafka auto-assign partitions via message key.
+     * Keeping this method for future use when manual partition control is needed
+     * (e.g., when topic partition count is known and consistent).
      *
      * @param string $channel Channel name
      * @param string $topicName Topic name

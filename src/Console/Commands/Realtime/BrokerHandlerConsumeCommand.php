@@ -13,6 +13,7 @@ use Toporia\Framework\Realtime\Contracts\{BrokerInterface, MessageInterface, Rea
 use Toporia\Framework\Realtime\Brokers\RedisBroker;
 use Toporia\Framework\Realtime\Brokers\RabbitMqBroker;
 use Toporia\Framework\Realtime\Brokers\KafkaBroker;
+use Toporia\Framework\Realtime\Brokers\KafkaBrokerImproved;
 use Toporia\Framework\Support\Accessors\Log;
 
 /**
@@ -284,7 +285,7 @@ final class BrokerHandlerConsumeCommand extends Command
         match ($driver) {
             'redis' => $this->subscribeRedis($broker, $channel, $callback),
             'rabbitmq' => $this->subscribeRabbitMq($broker, $channel, $callback),
-            'kafka' => $this->subscribeKafka($broker, $channel, $callback),
+            'kafka', 'kafka-improved' => $this->subscribeKafka($broker, $channel, $callback),
             default => $broker->subscribe($channel, $callback),
         };
     }
@@ -316,7 +317,7 @@ final class BrokerHandlerConsumeCommand extends Command
 
     private function subscribeKafka(BrokerInterface $broker, string $channel, callable $callback): void
     {
-        if ($broker instanceof KafkaBroker) {
+        if ($broker instanceof KafkaBroker || $broker instanceof KafkaBrokerImproved) {
             $broker->subscribe($channel, $callback);
         }
     }

@@ -73,6 +73,14 @@ final class TopicStrategyFactory
     private static function getDefaultTopicMapping(string $topicPrefix): array
     {
         return [
+            'events.*' => [
+                'topic' => 'events.stream',
+                'partitions' => 10,
+            ],
+            'events.**' => [
+                'topic' => 'events.stream',
+                'partitions' => 10,
+            ],
             'user.*' => [
                 'topic' => "{$topicPrefix}.user",
                 'partitions' => 10,
@@ -87,6 +95,10 @@ final class TopicStrategyFactory
             ],
             'chat.*' => [
                 'topic' => "{$topicPrefix}.chat",
+                'partitions' => 10,
+            ],
+            'orders.*' => [
+                'topic' => 'orders.events',
                 'partitions' => 10,
             ],
         ];

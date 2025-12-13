@@ -121,17 +121,27 @@ final class GroupedTopicStrategy implements TopicStrategyInterface
     /**
      * Check if channel matches pattern.
      *
+     * Supports patterns like:
+     * - 'events.*' matches 'events.stream', 'events.login' (single segment after dot)
+     * - 'events.**' matches 'events.stream.nested' (multiple segments)
+     * - 'user.*.notifications' matches 'user.123.notifications'
+     *
      * @param string $channel Channel name
-     * @param string $pattern Pattern (supports * wildcard)
+     * @param string $pattern Pattern (supports * and ** wildcards)
      * @return bool
      */
     private function matchesPattern(string $channel, string $pattern): bool
     {
-        // Convert wildcard pattern to regex
-        // IMPORTANT: Replace '.' first, then '*' to avoid conflicts
-        // Pattern: 'orders.*' -> 'orders\..*' (correct)
-        // If we replace '*' first: 'orders.*' -> 'orders..*' (wrong!)
-        $regex = str_replace(['.', '*'], ['\\.', '.*'], $pattern);
+        // Handle '**' (match any depth) vs '*' (match single segment)
+        // Order matters: escape '.', then handle '**', then '*'
+        $regex = preg_quote($pattern, '/');
+
+        // '**' matches any characters including dots (any depth)
+        $regex = str_replace('\\*\\*', '.*', $regex);
+
+        // '*' matches only non-dot characters (single segment)
+        $regex = str_replace('\\*', '[^.]+', $regex);
+
         return (bool) preg_match("/^{$regex}$/", $channel);
     }
 }

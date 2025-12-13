@@ -49,8 +49,8 @@ final class RdKafkaClientImproved implements KafkaClientInterface
     private int $lastErrorTime = 0;
 
     private const TOPIC_CACHE_TTL = 3600; // 1 hour
-    private const MAX_PENDING_MESSAGES = 1000; // Backpressure threshold
-    private const POLL_INTERVAL_MS = 10; // Poll interval for delivery callbacks
+    private const MAX_PENDING_MESSAGES = 10000; // Backpressure threshold (10x higher for high throughput)
+    private const POLL_INTERVAL_MS = 5; // Poll interval for delivery callbacks (faster polling)
 
     /**
      * @param array<string> $brokers Broker addresses
@@ -98,20 +98,39 @@ final class RdKafkaClientImproved implements KafkaClientInterface
         $producerConf->set('bootstrap.servers', $brokerList);
         $producerConf->set('metadata.broker.list', $brokerList);
 
+        // === HIGH THROUGHPUT PRODUCER SETTINGS ===
+        // These settings optimize for 100K+ msg/s throughput
+
         // Idempotence is optional - disable by default for faster startup
         // Delivery callbacks already ensure reliability
         // Set 'enable.idempotence' => 'true' in producer_config if needed
         $producerConf->set('enable.idempotence', 'false');
 
         // Retries for reliability (works without idempotence)
-        $producerConf->set('retries', '3');
+        $producerConf->set('retries', '5');
         $producerConf->set('retry.backoff.ms', '100');
+        $producerConf->set('retry.backoff.max.ms', '1000');
+
+        // Queue buffering for high throughput batching
+        $producerConf->set('queue.buffering.max.messages', '100000');
+        $producerConf->set('queue.buffering.max.ms', '5'); // linger.ms equivalent
+        $producerConf->set('queue.buffering.max.kbytes', '1048576'); // 1GB
+
+        // Socket settings for high throughput
+        $producerConf->set('socket.keepalive.enable', 'true');
+        $producerConf->set('socket.nagle.disable', 'true'); // Disable Nagle for low latency
+
+        // Request and message timeout
+        $producerConf->set('request.timeout.ms', '30000');
+        $producerConf->set('message.timeout.ms', '300000'); // 5 minutes
 
         // Set delivery report callback for async reliability
-        $producerConf->setDrMsgCb(function (RdKafka\Producer $kafka, RdKafka\Message $message) {
+        $producerConf->setDrMsgCb(function (RdKafka\Producer $producer, RdKafka\Message $message) {
+            unset($producer); // Required by callback signature but unused
             $this->handleDeliveryReport($message);
         });
 
+        // Apply user config (can override defaults)
         foreach ($this->producerConfig as $key => $value) {
             $producerConf->set($key, (string) $value);
         }
@@ -119,7 +138,7 @@ final class RdKafkaClientImproved implements KafkaClientInterface
         $this->producer = new RdKafka\Producer($producerConf);
         $this->producer->addBrokers($brokerList);
 
-        // Initialize consumer
+        // === HIGH THROUGHPUT CONSUMER SETTINGS ===
         $consumerConf = new RdKafka\Conf();
         $consumerConf->set('bootstrap.servers', $brokerList);
         $consumerConf->set('metadata.broker.list', $brokerList);
@@ -127,6 +146,40 @@ final class RdKafkaClientImproved implements KafkaClientInterface
         $consumerConf->set('enable.auto.commit', $this->manualCommit ? 'false' : 'true');
         $consumerConf->set('auto.offset.reset', 'earliest');
 
+        // Session management for consumer group stability
+        $consumerConf->set('session.timeout.ms', '30000'); // 30s session timeout
+        $consumerConf->set('heartbeat.interval.ms', '10000'); // 10s heartbeat (1/3 of session timeout)
+        $consumerConf->set('max.poll.interval.ms', '300000'); // 5 min max processing time
+
+        // Fetch settings for high throughput
+        $consumerConf->set('fetch.min.bytes', '1'); // Respond immediately with any data
+        $consumerConf->set('fetch.wait.max.ms', '100'); // Max wait time for fetch.min.bytes
+        $consumerConf->set('fetch.max.bytes', '52428800'); // 50MB max fetch
+        $consumerConf->set('max.partition.fetch.bytes', '1048576'); // 1MB per partition
+
+        // Socket settings
+        $consumerConf->set('socket.keepalive.enable', 'true');
+
+        // Rebalance callback for logging (optional but helpful for debugging)
+        $consumerConf->setRebalanceCb(function (RdKafka\KafkaConsumer $consumer, int $err, ?array $partitions) {
+            switch ($err) {
+                case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
+                    $consumer->assign($partitions);
+                    $partitionList = array_map(fn($p) => "{$p->getTopic()}:{$p->getPartition()}", $partitions ?? []);
+                    error_log("[Kafka] Assigned partitions: " . implode(', ', $partitionList));
+                    break;
+
+                case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
+                    $consumer->assign(null);
+                    error_log("[Kafka] Revoked partitions");
+                    break;
+
+                default:
+                    error_log("[Kafka] Rebalance error: " . rd_kafka_err2str($err));
+            }
+        });
+
+        // Apply user config (can override defaults)
         foreach ($this->consumerConfig as $key => $value) {
             $consumerConf->set($key, (string) $value);
         }
@@ -144,7 +197,17 @@ final class RdKafkaClientImproved implements KafkaClientInterface
         }
 
         $this->stopConsuming();
-        $this->flush(5000);
+
+        // Adaptive flush based on pending messages and context
+        // - HTTP: Quick flush but ensure queued messages are sent
+        // - CLI: Full flush with retries for reliability
+        $outQLen = $this->producer?->getOutQLen() ?? 0;
+
+        if ($outQLen > 0) {
+            // Calculate timeout based on queue length (10ms per message, min 100ms, max 2000ms for HTTP)
+            $baseTimeout = PHP_SAPI === 'cli' ? 5000 : min(max($outQLen * 10, 100), 2000);
+            $this->flush($baseTimeout);
+        }
 
         if ($this->consumer !== null) {
             try {
@@ -205,17 +268,21 @@ final class RdKafkaClientImproved implements KafkaClientInterface
                 $topicInstance->produce($partitionVal, 0, $payload, $key);
             }
 
-            // Non-blocking poll to trigger delivery callbacks
-            $this->producer->poll(0);
+            // In HTTP context: synchronously flush to ensure delivery before request ends
+            // In CLI context: async batching is OK, flush happens periodically or on disconnect
+            if (PHP_SAPI !== 'cli') {
+                // HTTP: must ensure message is delivered before response
+                $this->producer->poll(0);
+                $result = $this->producer->flush(100); // 100ms flush timeout
 
-            // Wait for this specific message with short timeout
-            // This ensures reliability while allowing async batching
-            $delivered = $this->waitForDelivery($messageId, 100); // 100ms max wait
-
-            if (!$delivered) {
-                // Message queued but not yet confirmed - that's OK for realtime
-                // The delivery callback will handle success/failure
-                // For critical messages, caller can use publishSync()
+                if ($result !== RD_KAFKA_RESP_ERR_NO_ERROR) {
+                    // Retry once with longer timeout
+                    $this->producer->poll(50);
+                    $this->producer->flush(200);
+                }
+            } else {
+                // CLI: non-blocking poll, delivery happens async
+                $this->producer->poll(0);
             }
 
         } catch (\Throwable $e) {
@@ -401,12 +468,17 @@ final class RdKafkaClientImproved implements KafkaClientInterface
         // Flush with timeout
         $result = $this->producer->flush($timeoutMs);
 
-        // If flush didn't complete, keep trying
-        if ($result !== RD_KAFKA_RESP_ERR_NO_ERROR) {
-            $retries = 10;
+        // Retry logic for reliability - adaptive based on context
+        if ($result !== RD_KAFKA_RESP_ERR_NO_ERROR && $this->producer->getOutQLen() > 0) {
+            // CLI: full retries for reliability
+            // HTTP: limited retries to balance speed and reliability
+            $maxRetries = PHP_SAPI === 'cli' ? 10 : 3;
+            $retryTimeout = PHP_SAPI === 'cli' ? 500 : 100;
+
+            $retries = $maxRetries;
             while ($retries-- > 0 && $this->producer->getOutQLen() > 0) {
-                $this->producer->poll(100);
-                $this->producer->flush(500);
+                $this->producer->poll(50);
+                $this->producer->flush($retryTimeout);
             }
         }
     }
