@@ -1,0 +1,74 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use {{ repositoryInterface }};
+use {{ entityClass }};
+
+final class {{ class }} implements {{ repositoryInterfaceShort }}
+{
+    /**
+     * @var array<int|string, {{ entityShortClass }}>
+     */
+    private array $items = [];
+
+    /**
+     * Find a record by its primary key.
+     */
+    public function find(int|string $id): ?{{ entityShortClass }}
+    {
+        return $this->items[$id] ?? null;
+    }
+
+    /**
+     * Get all records.
+     *
+     * @return array<{{ entityShortClass }}>
+     */
+    public function all(): array
+    {
+        return array_values($this->items);
+    }
+
+    /**
+     * Store a new record.
+     */
+    public function store({{ entityShortClass }} $entity): {{ entityShortClass }}
+    {
+        // Generate ID if not set
+        $id = $entity->id ?? count($this->items) + 1;
+        $this->items[$id] = $entity;
+
+        return $entity;
+    }
+
+    /**
+     * Update an existing record.
+     */
+    public function update({{ entityShortClass }} $entity): {{ entityShortClass }}
+    {
+        if (!isset($this->items[$entity->id])) {
+            throw new \RuntimeException("Entity with ID {$entity->id} not found.");
+        }
+
+        $this->items[$entity->id] = $entity;
+
+        return $entity;
+    }
+
+    /**
+     * Delete a record.
+     */
+    public function delete(int|string $id): bool
+    {
+        if (!isset($this->items[$id])) {
+            return false;
+        }
+
+        unset($this->items[$id]);
+
+        return true;
+    }
+}

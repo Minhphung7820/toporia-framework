@@ -1,0 +1,54 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Queue\Contracts\ShouldQueue;
+
+final class {{ class }} implements ShouldQueue
+{
+    /**
+     * The queue connection name.
+     */
+    public string $connection = 'default';
+
+    /**
+     * The queue name.
+     */
+    public string $queue = 'default';
+
+    /**
+     * The number of times the job may be attempted.
+     */
+    public int $tries = 3;
+
+    /**
+     * The number of seconds to wait before retrying.
+     */
+    public int $retryAfter = 60;
+
+    /**
+     * Create a new job instance.
+     */
+    public function __construct()
+    {
+        //
+    }
+
+    /**
+     * Execute the job.
+     */
+    public function handle(): void
+    {
+        //
+    }
+
+    /**
+     * Handle a job failure.
+     */
+    public function failed(\Throwable $exception): void
+    {
+        //
+    }
+}

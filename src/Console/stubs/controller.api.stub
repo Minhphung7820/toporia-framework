@@ -1,0 +1,78 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use App\Presentation\Http\Controllers\BaseController;
+use Toporia\Framework\Http\Request;
+
+final class {{ class }} extends BaseController
+{
+    /**
+     * Display a listing of the resource.
+     */
+    public function index(Request $request): void
+    {
+        $this->json([
+            'data' => [],
+            'meta' => [
+                'total' => 0,
+                'page' => 1,
+                'per_page' => 15,
+            ],
+        ]);
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(Request $request): void
+    {
+        // Validate and store
+
+        $this->json([
+            'data' => [],
+            'message' => 'Created successfully.',
+        ], 201);
+    }
+
+    /**
+     * Display the specified resource.
+     */
+    public function show(Request $request, int $id): void
+    {
+        $this->json([
+            'data' => [
+                'id' => $id,
+            ],
+        ]);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(Request $request, int $id): void
+    {
+        // Validate and update
+
+        $this->json([
+            'data' => [
+                'id' => $id,
+            ],
+            'message' => 'Updated successfully.',
+        ]);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(Request $request, int $id): void
+    {
+        // Delete resource
+
+        $this->json([
+            'message' => 'Deleted successfully.',
+        ]);
+    }
+}

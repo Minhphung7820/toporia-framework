@@ -1,0 +1,80 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use App\Presentation\Http\Controllers\BaseController;
+use Toporia\Framework\Http\Request;
+
+final class {{ class }} extends BaseController
+{
+    /**
+     * Display a listing of the resource.
+     */
+    public function index(Request $request): void
+    {
+        $this->json([
+            'message' => 'Index method',
+        ]);
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     */
+    public function create(Request $request): string
+    {
+        return $this->view('{{ viewPath }}/create');
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     */
+    public function store(Request $request): void
+    {
+        // Validate and store
+
+        $this->redirect(route('{{ routeName }}.index'));
+    }
+
+    /**
+     * Display the specified resource.
+     */
+    public function show(Request $request, int $id): void
+    {
+        $this->json([
+            'message' => 'Show method',
+            'id' => $id,
+        ]);
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     */
+    public function edit(Request $request, int $id): string
+    {
+        return $this->view('{{ viewPath }}/edit', [
+            'id' => $id,
+        ]);
+    }
+
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update(Request $request, int $id): void
+    {
+        // Validate and update
+
+        $this->redirect(route('{{ routeName }}.show', ['id' => $id]));
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy(Request $request, int $id): void
+    {
+        // Delete resource
+
+        $this->redirect(route('{{ routeName }}.index'));
+    }
+}

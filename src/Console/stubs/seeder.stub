@@ -1,0 +1,100 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Database\Seeder;
+{{ factoryUse }}
+
+/**
+ * {{ class }} Seeder
+ *
+ * Seeds {{ tableName }} table with data.
+ *
+ * Features:
+ * - Dependency management
+ * - Transaction support
+ * - Batch operations
+ * - Progress tracking
+ * - Factory integration
+ *
+ * Usage:
+ * ```bash
+ * php console db:seed --class={{ class }}
+ * php console db:seed --class={{ class }} --count=100
+ * ```
+ *
+ * Architecture:
+ * - Clean Architecture: Business logic separated from infrastructure
+ * - SOLID: Single Responsibility, Open/Closed, Dependency Inversion
+ * - Performance: Optimized batch inserts, memory-efficient processing
+ */
+final class {{ class }} extends Seeder
+{
+    /**
+     * Batch size for bulk operations.
+     */
+    protected int $batchSize = 500;
+
+    /**
+     * Get seeder dependencies (other seeders that must run first).
+     *
+     * @return array<string> Array of seeder class names
+     */
+    public function dependencies(): array
+    {
+        return [
+            // Example: CategorySeeder::class,
+            // Example: UserSeeder::class,
+        ];
+    }
+
+    /**
+     * Run the database seeds.
+     *
+     * @return void
+     */
+    protected function seed(): void
+    {
+        // Example 1: Using factory (recommended for small datasets)
+        // $this->factory({{ factoryName }}, 10);
+
+        // Example 2: Using factory with states
+        // $this->factory({{ factoryName }}->state('active'), 5);
+
+        // Example 3: Using factoryBatch (recommended for large datasets - optimized)
+        // $this->factoryBatch({{ factoryName }}::class, 1000);
+
+        // Example 4: Using factoryBatch with callable attributes
+        // $categoryIds = [1, 2, 3];
+        // $this->factoryBatch(
+        //     {{ factoryName }}::class,
+        //     100,
+        //     ['category_id' => fn() => $this->faker()->randomElement($categoryIds)]
+        // );
+
+        // Example 5: Raw insert (for maximum performance with large datasets)
+        // $this->insert('{{ tableName }}', [
+        //     ['column1' => 'value1', 'column2' => 'value2', 'created_at' => now(), 'updated_at' => now()],
+        //     ['column1' => 'value3', 'column2' => 'value4', 'created_at' => now(), 'updated_at' => now()],
+        // ]);
+
+        // Example 6: Truncate table before seeding
+        // $this->truncate('{{ tableName }}');
+
+        // Example 7: Call other seeders
+        // $this->call(RelatedSeeder::class);
+        // $this->callMany([Seeder1::class, Seeder2::class]);
+    }
+
+    /**
+     * Whether to use transaction for this seeder.
+     *
+     * @return bool
+     */
+    public function useTransaction(): bool
+    {
+        return true; // Wrap in transaction for safety (rollback on error)
+    }
+}

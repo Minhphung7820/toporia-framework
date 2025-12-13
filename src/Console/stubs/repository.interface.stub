@@ -1,0 +1,37 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use {{ entityClass }};
+
+interface {{ class }}
+{
+    /**
+     * Find a record by its primary key.
+     */
+    public function find(int|string $id): ?{{ entityShortClass }};
+
+    /**
+     * Get all records.
+     *
+     * @return array<{{ entityShortClass }}>
+     */
+    public function all(): array;
+
+    /**
+     * Store a new record.
+     */
+    public function store({{ entityShortClass }} $entity): {{ entityShortClass }};
+
+    /**
+     * Update an existing record.
+     */
+    public function update({{ entityShortClass }} $entity): {{ entityShortClass }};
+
+    /**
+     * Delete a record.
+     */
+    public function delete(int|string $id): bool;
+}

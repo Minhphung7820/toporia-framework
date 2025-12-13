@@ -1,0 +1,42 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Database\ORM\Model;
+
+final class {{ class }} extends Model
+{
+    /**
+     * The table associated with the model.
+     */
+    protected static string $table = '{{ table }}';
+
+    /**
+     * The primary key for the model.
+     */
+    protected static string $primaryKey = 'id';
+
+    /**
+     * The attributes that are mass assignable.
+     */
+    protected static array $fillable = [
+        //
+    ];
+
+    /**
+     * The attributes that should be hidden for arrays.
+     */
+    protected static array $hidden = [
+        //
+    ];
+
+    /**
+     * The attributes that should be cast.
+     */
+    protected static array $casts = [
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
+}

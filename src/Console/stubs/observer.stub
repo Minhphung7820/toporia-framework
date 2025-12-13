@@ -1,0 +1,126 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use {{ modelClass }};
+
+/**
+ * {{ modelShortClass }} Observer
+ *
+ * Handles lifecycle events for the {{ modelShortClass }} model.
+ * Each method receives the model instance and can modify it directly.
+ *
+ * Available events:
+ * - creating: Before a new model is saved
+ * - created: After a new model is saved
+ * - updating: Before an existing model is saved
+ * - updated: After an existing model is saved
+ * - saving: Before any save (create or update)
+ * - saved: After any save (create or update)
+ * - deleting: Before a model is deleted
+ * - deleted: After a model is deleted
+ * - restoring: Before a soft-deleted model is restored
+ * - restored: After a soft-deleted model is restored
+ * - forceDeleting: Before a model is force deleted
+ * - forceDeleted: After a model is force deleted
+ * - retrieved: After a model is retrieved from database
+ *
+ * Return false from "ing" events to cancel the operation.
+ */
+final class {{ class }}
+{
+    /**
+     * Handle the {{ modelShortClass }} "creating" event.
+     * Return false to cancel the creation.
+     */
+    public function creating({{ modelShortClass }} ${{ modelVariable }}): bool
+    {
+        return true;
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "created" event.
+     */
+    public function created({{ modelShortClass }} ${{ modelVariable }}): void
+    {
+        //
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "updating" event.
+     * Return false to cancel the update.
+     */
+    public function updating({{ modelShortClass }} ${{ modelVariable }}): bool
+    {
+        return true;
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "updated" event.
+     */
+    public function updated({{ modelShortClass }} ${{ modelVariable }}): void
+    {
+        //
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "saving" event.
+     * Return false to cancel the save.
+     */
+    public function saving({{ modelShortClass }} ${{ modelVariable }}): bool
+    {
+        return true;
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "saved" event.
+     */
+    public function saved({{ modelShortClass }} ${{ modelVariable }}): void
+    {
+        //
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "deleting" event.
+     * Return false to cancel the deletion.
+     */
+    public function deleting({{ modelShortClass }} ${{ modelVariable }}): bool
+    {
+        return true;
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "deleted" event.
+     */
+    public function deleted({{ modelShortClass }} ${{ modelVariable }}): void
+    {
+        //
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "forceDeleting" event.
+     * Return false to cancel the force deletion.
+     */
+    public function forceDeleting({{ modelShortClass }} ${{ modelVariable }}): bool
+    {
+        return true;
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "forceDeleted" event.
+     */
+    public function forceDeleted({{ modelShortClass }} ${{ modelVariable }}): void
+    {
+        //
+    }
+
+    /**
+     * Handle the {{ modelShortClass }} "retrieved" event.
+     */
+    public function retrieved({{ modelShortClass }} ${{ modelVariable }}): void
+    {
+        //
+    }
+}

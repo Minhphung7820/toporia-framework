@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Console\Command;
+
+final class {{ class }} extends Command
+{
+    /**
+     * The command signature.
+     */
+    protected string $signature = '{{ signature }}';
+
+    /**
+     * The command description.
+     */
+    protected string $description = '{{ description }}';
+
+    /**
+     * Execute the console command.
+     */
+    public function handle(): int
+    {
+        $this->info('Command executed successfully.');
+
+        return 0;
+    }
+}

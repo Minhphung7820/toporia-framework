@@ -1,0 +1,110 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use App\Infrastructure\Persistence\Models\{{ modelName }};
+use Toporia\Framework\Testing\Factories\Factory;
+
+/**
+ * {{ class }} Factory
+ *
+ * Factory for creating {{ modelName }} model instances.
+ *
+ * Features:
+ * - Lazy attributes (Closure evaluation)
+ * - State modifiers
+ * - Sequences for unique values
+ * - Relationships (has, for)
+ * - After making/creating callbacks
+ *
+ * Usage:
+ * ```php
+ * // Create single model
+ * {{ modelName }}::factory()->create();
+ *
+ * // Create multiple models
+ * {{ modelName }}::factory()->count(10)->create();
+ *
+ * // With attributes
+ * {{ modelName }}::factory()->create(['name' => 'Custom Name']);
+ *
+ * // With state
+ * {{ modelName }}::factory()->state('active')->create();
+ *
+ * // With relationships
+ * {{ modelName }}::factory()
+ *     ->has(PostFactory::new()->count(3), 'posts')
+ *     ->create();
+ * ```
+ *
+ * @template T of {{ modelName }}
+ */
+final class {{ class }} extends Factory
+{
+    /**
+     * The name of the factory's corresponding model.
+     *
+     * @var class-string<T>
+     */
+    protected string $model = {{ modelName }}::class;
+
+    /**
+     * Define the model's default state.
+     *
+     * Supports lazy attributes via Closures:
+     * ```php
+     * 'email' => fn($faker) => $faker->unique()->safeEmail(),
+     * 'created_at' => fn($faker) => now(),
+     * ```
+     *
+     * @return array<string, mixed>
+     */
+    public function definition(): array
+    {
+        return [
+            // 'name' => $this->faker->name(),
+            // 'email' => fn($faker) => $faker->unique()->safeEmail(), // Lazy attribute
+            // 'password' => bcrypt('password'),
+            // 'created_at' => fn($faker) => now(),
+            // 'updated_at' => fn($faker) => now(),
+        ];
+    }
+
+    /**
+     * Indicate that the model is in a specific state.
+     *
+     * Usage:
+     * ```php
+     * {{ modelName }}::factory()->state('active')->create();
+     * ```
+     *
+     * @return array<string, mixed>
+     */
+    public function stateActive(): array
+    {
+        return [
+            // 'is_active' => true,
+            // 'status' => 'active',
+        ];
+    }
+
+    /**
+     * Indicate that the model is in a specific state.
+     *
+     * Usage:
+     * ```php
+     * {{ modelName }}::factory()->state('inactive')->create();
+     * ```
+     *
+     * @return array<string, mixed>
+     */
+    public function stateInactive(): array
+    {
+        return [
+            // 'is_active' => false,
+            // 'status' => 'inactive',
+        ];
+    }
+}

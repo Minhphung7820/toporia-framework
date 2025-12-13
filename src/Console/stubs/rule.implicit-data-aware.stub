@@ -1,0 +1,71 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Validation\Contracts\DataAwareRuleInterface;
+use Toporia\Framework\Validation\Contracts\ImplicitRuleInterface;
+use Toporia\Framework\Validation\ValidationData;
+
+/**
+ * {{ class }} Rule
+ *
+ * Implicit data-aware validation rule.
+ * - Runs even when field is empty (implicit)
+ * - Has access to all validation data (data-aware)
+ *
+ * Use this for complex rules that need to check presence AND compare with other fields.
+ *
+ * Performance:
+ * - Runs first (fail-fast optimization)
+ * - ValidationData is passed by reference (no copying)
+ */
+final class {{ class }} implements ImplicitRuleInterface, DataAwareRuleInterface
+{
+    /**
+     * @var ValidationData|null All validation data
+     */
+    private ?ValidationData $data = null;
+
+    /**
+     * Set validation data for this rule.
+     *
+     * Called once before validation starts.
+     * You can cache/precompute values from data here.
+     *
+     * @param ValidationData $data All validation data
+     * @return void
+     */
+    public function setData(ValidationData $data): void
+    {
+        $this->data = $data;
+    }
+
+    /**
+     * Determine if the validation rule passes.
+     *
+     * This method is called even when the value is null or empty.
+     *
+     * @param string $attribute The attribute name being validated
+     * @param mixed $value The value being validated (may be null)
+     * @return bool True if validation passes, false otherwise
+     */
+    public function passes(string $attribute, mixed $value): bool
+    {
+        // TODO: Implement validation logic
+        // Access other fields via $this->data->get('field_name')
+        return true;
+    }
+
+    /**
+     * Get the validation error message.
+     *
+     * @return string The error message (supports :attribute placeholder)
+     */
+    public function message(): string
+    {
+        return 'The :attribute is invalid.';
+    }
+}
+

@@ -1,0 +1,31 @@
+<?php
+
+declare(strict_types=1);
+
+use Toporia\Framework\Database\Migration\Migration;
+
+/**
+ * {{ description }}
+ */
+class {{ class }} extends Migration
+{
+    /**
+     * Run the migration.
+     */
+    public function up(): void
+    {
+        $this->schema->table('{{ table }}', function ($table) {
+            //
+        });
+    }
+
+    /**
+     * Reverse the migration.
+     */
+    public function down(): void
+    {
+        $this->schema->table('{{ table }}', function ($table) {
+            //
+        });
+    }
+}

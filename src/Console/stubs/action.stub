@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Http\Request;
+use Toporia\Framework\Http\Response;
+
+final class {{ class }}
+{
+    /**
+     * Handle the incoming request.
+     */
+    public function __invoke(Request $request): Response
+    {
+        return response()->json([
+            'message' => 'Action executed successfully.',
+        ]);
+    }
+}

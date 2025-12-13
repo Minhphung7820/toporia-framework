@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Http\Middleware\MiddlewareInterface;
+use Toporia\Framework\Http\Request;
+use Toporia\Framework\Http\Response;
+
+final class {{ class }} implements MiddlewareInterface
+{
+    /**
+     * Handle an incoming request.
+     */
+    public function handle(Request $request, callable $next): Response
+    {
+        // Perform action before request is handled
+
+        $response = $next($request);
+
+        // Perform action after request is handled
+
+        return $response;
+    }
+}

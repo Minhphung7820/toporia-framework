@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Events\Contracts\EventDispatcherInterface;
+
+final class {{ class }}
+{
+    /**
+     * Register the listeners for the subscriber.
+     */
+    public function subscribe(EventDispatcherInterface $events): void
+    {
+        // $events->listen(
+        //     SomeEvent::class,
+        //     [self::class, 'handleSomeEvent']
+        // );
+    }
+
+    /**
+     * Handle the event.
+     */
+    public function handleSomeEvent(object $event): void
+    {
+        //
+    }
+}

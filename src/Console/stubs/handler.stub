@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Bus\AbstractHandler;
+use {{ commandClass }};
+
+final class {{ class }} extends AbstractHandler
+{
+    /**
+     * Create a new handler instance.
+     */
+    public function __construct()
+    {
+        //
+    }
+
+    /**
+     * Execute the handler.
+     */
+    public function __invoke({{ commandShortClass }} $command): mixed
+    {
+        //
+    }
+}

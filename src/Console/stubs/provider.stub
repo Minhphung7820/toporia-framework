@@ -1,0 +1,27 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Toporia\Framework\Container\Contracts\ContainerInterface;
+use Toporia\Framework\Providers\ServiceProvider;
+
+final class {{ class }} extends ServiceProvider
+{
+    /**
+     * Register any application services.
+     */
+    public function register(ContainerInterface $container): void
+    {
+        //
+    }
+
+    /**
+     * Bootstrap any application services.
+     */
+    public function boot(ContainerInterface $container): void
+    {
+        //
+    }
+}
