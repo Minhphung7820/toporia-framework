@@ -6,9 +6,11 @@ namespace Toporia\Framework\Realtime\Brokers;
 
 use Toporia\Framework\Realtime\Brokers\CircuitBreaker\CircuitBreaker;
 use Toporia\Framework\Realtime\Brokers\Kafka\AsyncProducerQueue;
+use Toporia\Framework\Realtime\Brokers\Kafka\BatchProducer;
 use Toporia\Framework\Realtime\Brokers\Kafka\Client\{KafkaClientInterface, KafkaMessage, RdKafkaClientImproved};
 use Toporia\Framework\Realtime\Brokers\Kafka\DeadLetterQueue;
 use Toporia\Framework\Realtime\Brokers\Kafka\ProducerPool;
+use Toporia\Framework\Realtime\Brokers\Kafka\SharedMemoryQueue;
 use Toporia\Framework\Realtime\Brokers\Kafka\TopicStrategy\TopicStrategyFactory;
 use Toporia\Framework\Realtime\Consumer\Contracts\BatchConsumerHandlerInterface;
 use Toporia\Framework\Realtime\Contracts\{BrokerInterface, HealthCheckableInterface, HealthCheckResult, MessageInterface, TopicStrategyInterface};
@@ -57,6 +59,8 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
     // High-performance components
     private ?ProducerPool $producerPool = null;
     private ?AsyncProducerQueue $asyncQueue = null;
+    private ?SharedMemoryQueue $sharedQueue = null;
+    private ?BatchProducer $batchProducer = null;
     private ?DeadLetterQueue $dlq = null;
     private KafkaMetricsCollector $metrics;
 
@@ -81,6 +85,11 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
     private bool $useProducerPool;
 
     /**
+     * @var bool Whether to use shared memory queue (APCu)
+     */
+    private bool $useSharedMemory;
+
+    /**
      * @var int Pool size for producers
      */
     private int $poolSize;
@@ -96,6 +105,7 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
         // Configuration
         $this->useAsyncQueue = (bool) ($config['async_queue'] ?? (PHP_SAPI !== 'cli'));
         $this->useProducerPool = (bool) ($config['producer_pool'] ?? false);
+        $this->useSharedMemory = (bool) ($config['shared_memory'] ?? false);
         $this->poolSize = (int) ($config['pool_size'] ?? 4);
 
         // Core components
@@ -138,10 +148,31 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
         // Async queue (for HTTP non-blocking)
         if ($this->useAsyncQueue) {
             $this->asyncQueue = new AsyncProducerQueue(
-                maxSize: (int) ($this->config['queue_max_size'] ?? 100000),
+                maxSize: (int) ($this->config['queue_max_size'] ?? 131072),
                 batchSize: (int) ($this->config['batch_size'] ?? 1000),
                 flushIntervalMs: (int) ($this->config['flush_interval_ms'] ?? 50)
             );
+        }
+
+        // Shared memory queue (for true inter-process async with APCu)
+        if ($this->useSharedMemory) {
+            $this->sharedQueue = new SharedMemoryQueue(
+                name: $this->config['shared_queue_name'] ?? 'kafka_hp_queue',
+                maxSize: (int) ($this->config['shared_queue_max_size'] ?? 1000000),
+                ttl: (int) ($this->config['shared_queue_ttl'] ?? 300)
+            );
+
+            // Batch producer for CLI workers
+            if (PHP_SAPI === 'cli') {
+                $brokers = $this->normalizeBrokers($this->config['brokers'] ?? ['localhost:9092']);
+                $this->batchProducer = new BatchProducer(
+                    implode(',', $brokers),
+                    $this->config['producer_config'] ?? [],
+                    (int) ($this->config['batch_size'] ?? 10000),
+                    (int) ($this->config['flush_interval_ms'] ?? 100)
+                );
+                $this->batchProducer->setMetrics($this->metrics);
+            }
         }
 
         // Dead Letter Queue
@@ -234,13 +265,19 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
         $startTime = microtime(true);
 
         try {
-            // Route based on mode
-            if ($this->asyncQueue !== null && PHP_SAPI !== 'cli') {
-                // HTTP: Use async queue (non-blocking)
+            // Route based on mode (priority order)
+            if ($this->sharedQueue !== null && $this->sharedQueue->isAvailable() && PHP_SAPI !== 'cli') {
+                // HTTP: Use shared memory queue (fastest, true async via APCu)
+                $this->publishViaSharedMemory($topicName, $payload, $key);
+            } elseif ($this->asyncQueue !== null && PHP_SAPI !== 'cli') {
+                // HTTP: Use in-process async queue (non-blocking)
                 $this->publishAsync($topicName, $payload, $key);
             } elseif ($this->producerPool !== null) {
                 // CLI with pool: Use producer pool
                 $this->publishViaPool($topicName, $payload, $key);
+            } elseif ($this->batchProducer !== null) {
+                // CLI with batch producer
+                $this->publishViaBatch($topicName, $payload, $key);
             } else {
                 // Default: Direct publish
                 $this->publishDirect($topicName, $payload, $key);
@@ -282,6 +319,30 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
     }
 
     /**
+     * Publish via shared memory queue (APCu).
+     *
+     * Fastest option for HTTP - true inter-process async.
+     * Messages are picked up by kafka:flush-worker daemon.
+     */
+    private function publishViaSharedMemory(string $topic, string $payload, ?string $key): void
+    {
+        if ($this->sharedQueue === null) {
+            throw new \RuntimeException('Shared memory queue not initialized');
+        }
+
+        $success = $this->sharedQueue->enqueue($topic, $payload, $key);
+
+        if (!$success) {
+            // Queue full - fallback to async queue or direct
+            if ($this->asyncQueue !== null) {
+                $this->publishAsync($topic, $payload, $key);
+            } else {
+                $this->publishDirect($topic, $payload, $key);
+            }
+        }
+    }
+
+    /**
      * Publish via producer pool.
      */
     private function publishViaPool(string $topic, string $payload, ?string $key): void
@@ -291,6 +352,18 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
         }
 
         $this->producerPool->publish($topic, $payload, null, $key);
+    }
+
+    /**
+     * Publish via batch producer.
+     */
+    private function publishViaBatch(string $topic, string $payload, ?string $key): void
+    {
+        if ($this->batchProducer === null) {
+            throw new \RuntimeException('Batch producer not initialized');
+        }
+
+        $this->batchProducer->produce($topic, $payload, $key);
     }
 
     /**
@@ -717,9 +790,11 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
             return HealthCheckResult::healthy(
                 message: 'Kafka HP connection healthy',
                 details: [
-                    'mode' => $this->useAsyncQueue ? 'async' : ($this->useProducerPool ? 'pool' : 'direct'),
+                    'mode' => $this->getPublishMode(),
                     'async_queue' => $this->asyncQueue?->getStats(),
+                    'shared_queue' => $this->sharedQueue?->getStats(),
                     'producer_pool' => $this->producerPool?->getStats(),
+                    'batch_producer' => $this->batchProducer?->getStats(),
                     'dlq' => $this->dlq?->getStats(),
                     'subscriptions' => count($this->subscriptions),
                     'circuit_breaker' => $this->circuitBreaker->getState()->value,
@@ -792,6 +867,52 @@ final class KafkaBrokerHighPerformance implements BrokerInterface, HealthCheckab
     public function getDlq(): ?DeadLetterQueue
     {
         return $this->dlq;
+    }
+
+    /**
+     * Get the shared memory queue instance.
+     *
+     * @return SharedMemoryQueue|null
+     */
+    public function getSharedQueue(): ?SharedMemoryQueue
+    {
+        return $this->sharedQueue;
+    }
+
+    /**
+     * Get the batch producer instance.
+     *
+     * @return BatchProducer|null
+     */
+    public function getBatchProducer(): ?BatchProducer
+    {
+        return $this->batchProducer;
+    }
+
+    /**
+     * Get current publish mode description.
+     *
+     * @return string
+     */
+    public function getPublishMode(): string
+    {
+        if (PHP_SAPI !== 'cli') {
+            if ($this->sharedQueue?->isAvailable()) {
+                return 'shared_memory';
+            }
+            if ($this->asyncQueue !== null) {
+                return 'async_queue';
+            }
+        } else {
+            if ($this->producerPool !== null) {
+                return 'producer_pool';
+            }
+            if ($this->batchProducer !== null) {
+                return 'batch_producer';
+            }
+        }
+
+        return 'direct';
     }
 
     /**
