@@ -6,7 +6,7 @@ namespace Toporia\Framework\Database;
 
 use Toporia\Framework\Database\Contracts\ConnectionInterface;
 use Toporia\Framework\Database\Contracts\GrammarInterface;
-use Toporia\Framework\Database\Grammar\{MySQLGrammar, PostgreSQLGrammar, SQLiteGrammar, MongoDBGrammar};
+use Toporia\Framework\Database\Grammar\{MySQLGrammar, PostgreSQLGrammar, SQLiteGrammar};
 use Toporia\Framework\Database\Query\QueryBuilder;
 use PDO;
 use PDOException;
@@ -463,8 +463,10 @@ class Connection implements ConnectionInterface
             'mysql' => new MySQLGrammar(),
             'pgsql' => new PostgreSQLGrammar(),
             'sqlite' => new SQLiteGrammar(),
-            'mongodb' => new MongoDBGrammar(),
-            default => throw new ConnectionException("Unsupported driver for Grammar: {$driver}")
+            default => throw new ConnectionException(
+                "Unsupported driver for Grammar: {$driver}. " .
+                "For MongoDB support, install the toporia/mongodb package."
+            )
         };
     }
 

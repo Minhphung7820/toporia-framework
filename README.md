@@ -46,6 +46,7 @@ Toporia ecosystem includes optional packages for extended functionality:
 
 | Package | Description | Install |
 |---------|-------------|---------|
+| [toporia/mongodb](https://github.com/Minhphung7820/toporia-mongodb) | MongoDB ODM with embedded documents, references, aggregation | `composer require toporia/mongodb` |
 | [toporia/socialite](https://github.com/Minhphung7820/toporia-socialite) | OAuth social authentication (Google, Facebook, GitHub) | `composer require toporia/socialite` |
 | [toporia/webhook](https://github.com/Minhphung7820/toporia-webhook) | Webhook dispatching and receiving | `composer require toporia/webhook` |
 | [toporia/tenancy](https://github.com/Minhphung7820/toporia-tenancy) | Multi-tenancy support | `composer require toporia/tenancy` |
@@ -55,11 +56,13 @@ Toporia ecosystem includes optional packages for extended functionality:
 After installing a package, register its service provider in your `AppServiceProvider`:
 
 ```php
+use Toporia\MongoDB\MongoDBServiceProvider;
 use Toporia\Socialite\SocialiteServiceProvider;
 use Toporia\Webhook\WebhookServiceProvider;
 
 public function register(ContainerInterface $container): void
 {
+    $container->register(MongoDBServiceProvider::class);
     $container->register(SocialiteServiceProvider::class);
     $container->register(WebhookServiceProvider::class);
 }
@@ -68,6 +71,7 @@ public function register(ContainerInterface $container): void
 Publish package configs:
 
 ```bash
+php console vendor:publish --tag=mongodb-config
 php console vendor:publish --tag=socialite-config
 php console vendor:publish --tag=webhook-config
 ```
@@ -86,6 +90,7 @@ composer require toporia/framework
 ### Optional Extensions
 
 - `ext-redis` - Redis cache, queue drivers, and realtime broker
+- `ext-mongodb` - Required for MongoDB package (`toporia/mongodb`)
 - `ext-pdo_mysql` / `ext-pdo_pgsql` / `ext-pdo_sqlite` - Database support
 - `ext-pcntl` - Multi-process execution (Linux/macOS only)
 

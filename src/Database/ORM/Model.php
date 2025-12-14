@@ -449,7 +449,7 @@ abstract class Model implements ModelInterface, ObservableInterface, \JsonSerial
      * - MySQL → MySQLGrammar
      * - PostgreSQL → PostgreSQLGrammar
      * - SQLite → SQLiteGrammar
-     * - MongoDB → MongoDBGrammar
+     * - MongoDB → Install toporia/mongodb package
      * - Grammar is cached per connection for optimal performance
      *
      * @return ConnectionInterface

@@ -33,6 +33,11 @@ final class VendorPublishCommand extends Command
      * @var array<string, array{source: string, destination: string}>
      */
     private array $publishables = [
+        // MongoDB package
+        'mongodb-config' => [
+            'source' => 'vendor/toporia/mongodb/config/mongodb.php',
+            'destination' => 'config/mongodb.php',
+        ],
         // Socialite package
         'socialite-config' => [
             'source' => 'vendor/toporia/socialite/config/socialite.php',
