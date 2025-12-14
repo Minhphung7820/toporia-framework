@@ -67,12 +67,18 @@ use Toporia\Framework\Realtime\RealtimeManager;
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
- * @version     4.1.0 (Redis Streams - Blocking Strategy)
+ * @version     4.2.0 (Redis Streams - Fixed Message Exhaustion)
  * @package     toporia/framework
  * @subpackage  Realtime\Brokers
  * @since       2025-12-14
  *
  * @link        https://github.com/Minhphung7820/toporia
+ *
+ * @changelog
+ *   v4.2.0 (2025-12-14): Fixed consumer stopping prematurely at ~11K/15K messages
+ *                        - Increased empty poll threshold (2 → 5)
+ *                        - Added pending message verification before exit
+ *                        - Improved connection error retry logic
  */
 final class RedisBroker implements BrokerInterface, HealthCheckableInterface
 {

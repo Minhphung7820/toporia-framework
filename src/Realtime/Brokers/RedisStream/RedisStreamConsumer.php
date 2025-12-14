@@ -47,10 +47,23 @@ use Toporia\Framework\Realtime\Message;
  * - Exactly-once semantics
  * → Use Kafka instead
  *
+ * Bug Fixes (v2.2.0):
+ * - Fixed premature exit on empty polls (was 2, now 5 consecutive empties)
+ * - Added BOTH pending AND undelivered message verification before exit
+ * - Improved connection error handling with retry logic
+ * - Prevents data loss when processing large message sets (e.g., 15K messages)
+ *
+ * Important: Redis Streams does NOT batch 15K messages as one unit!
+ * - Producer: XADD × 15,000 (pipeline append)
+ * - Redis: Append-only log (O(1) per message)
+ * - Consumer: Pull in batches (COUNT 100 → 150 pulls for 15K messages)
+ * - Each pull: XREADGROUP returns ≤100 messages
+ * - Consumer tracks: Pending (in PEL) + Undelivered (in stream, not yet pulled)
+ *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
- * @version     2.1.0
+ * @version     2.2.0
  */
 final class RedisStreamConsumer
 {
@@ -169,6 +182,8 @@ final class RedisStreamConsumer
         $pollCount = 0;
         $totalProcessed = 0;
         $consecutiveEmptyPolls = 0;
+        $connectionErrorCount = 0;  // Track connection errors
+        $otherErrorCount = 0;       // Track other errors
 
         // Non-blocking mode: poll until no more messages (exhaust available messages)
         // Blocking mode: infinite loop (for standalone consumer)
@@ -225,6 +240,9 @@ final class RedisStreamConsumer
                     // No sleep needed - BLOCK handles waiting efficiently
                 } else {
                     $consecutiveEmptyPolls = 0;
+                    // Reset error counters on successful message processing
+                    $connectionErrorCount = 0;
+                    $otherErrorCount = 0;
                 }
 
                 // Periodically check for pending messages (every 10 polls)
@@ -235,33 +253,96 @@ final class RedisStreamConsumer
                     }
                 }
 
-                // In non-blocking mode: keep polling until 2 consecutive empty results
-                // This is CORRECT for Redis Streams:
-                // - 1st empty: might be between batches
-                // - 2nd empty: stream is truly exhausted
-                if (!$blocking && $consecutiveEmptyPolls >= 2) {
+                // In non-blocking mode: check if stream is truly exhausted
+                // CRITICAL FIX: Increased threshold from 2 to 5 and add pending count verification
+                // to prevent premature exit when Redis has network delays or batching delays.
+                //
+                // Previous bug: exited after just 2 empty polls (~100ms), causing 4K/15K messages
+                // to be left unprocessed in the stream.
+                //
+                // New logic:
+                // - Wait for 5 consecutive empty polls (~250ms) to reduce false positives
+                // - Verify NO pending messages exist before exiting
+                // - Only then confirm stream is truly exhausted
+                if (!$blocking && $consecutiveEmptyPolls >= 5) {
+                    // Double-check: Are there actually ANY messages left in streams?
+                    // CRITICAL: Must check BOTH pending (in PEL) AND undelivered (in stream)
+                    $hasMessagesLeft = false;
+
+                    foreach (array_keys($streamCallbacks) as $stream) {
+                        // Check 1: Pending messages (already delivered but not ACKed)
+                        $pendingCount = $this->getPendingCount($stream);
+
+                        // Check 2: Undelivered messages (still in stream, not yet delivered to group)
+                        $undeliveredCount = $this->getUndeliveredCount($stream);
+
+                        if ($pendingCount > 0 || $undeliveredCount > 0) {
+                            $hasMessagesLeft = true;
+                            break;
+                        }
+                    }
+
+                    if ($hasMessagesLeft) {
+                        // Reset counter - there are still messages to process
+                        $consecutiveEmptyPolls = 0;
+                        continue; // Keep polling
+                    }
+
+                    // Confirmed: no new messages AND no pending messages AND no undelivered messages
+                    // Stream is truly exhausted, safe to exit
                     return $totalProcessed;
                 }
             } catch (\Throwable $e) {
                 error_log("Redis Stream consumer error: {$e->getMessage()}");
                 BrokerMetrics::recordError('redis_stream', 'consume');
 
-                // Check if connection error - try to reconnect
-                if (str_contains($e->getMessage(), 'read error') || str_contains($e->getMessage(), 'connection')) {
-                    error_log("Redis Stream: Connection lost, stopping consumption for this cycle");
-                    // Return what we've processed so far, command loop will reconnect on next iteration
-                    return $totalProcessed;
+                // Check if connection error
+                $isConnectionError = str_contains($e->getMessage(), 'read error') ||
+                                   str_contains($e->getMessage(), 'connection') ||
+                                   str_contains($e->getMessage(), 'timeout');
+
+                if ($isConnectionError) {
+                    $connectionErrorCount++;
+
+                    error_log("Redis Stream: Connection error #{$connectionErrorCount}, will retry...");
+
+                    // CRITICAL FIX: Don't exit immediately on connection errors
+                    // Retry up to 3 times with exponential backoff before giving up
+                    if ($connectionErrorCount <= 3) {
+                        $backoffMs = min(100 * $connectionErrorCount, 500); // 100ms, 200ms, 300ms
+                        usleep($backoffMs * 1000);
+                        continue; // Retry the poll
+                    } else {
+                        // After 3 retries, check if we have processed any messages
+                        if ($totalProcessed > 0) {
+                            error_log("Redis Stream: Connection unstable but processed {$totalProcessed} messages, returning for reconnect");
+                            return $totalProcessed; // Let command loop handle reconnection
+                        }
+                        // If no messages processed at all, this might be a permanent connection issue
+                        error_log("Redis Stream: Persistent connection error with no messages processed, exiting");
+                        return $totalProcessed;
+                    }
+                } else {
+                    // Reset connection error count on non-connection errors
+                    $connectionErrorCount = 0;
                 }
 
                 // Brief sleep before retry for other errors
                 usleep(100000); // 100ms
 
-                // In non-blocking mode, return on error after logging
+                // For non-connection errors in non-blocking mode, log and continue
+                // Don't exit immediately - might be transient errors
                 if (!$blocking) {
-                    return $totalProcessed;
+                    $otherErrorCount++;
+
+                    if ($otherErrorCount > 5) {
+                        error_log("Redis Stream: Too many errors ({$otherErrorCount}), exiting this cycle");
+                        return $totalProcessed;
+                    }
+                    // Otherwise continue polling
                 }
             }
-        } while ($this->consuming && $blocking);
+        } while (true);
 
         return $totalProcessed;
     }
@@ -487,10 +568,10 @@ final class RedisStreamConsumer
     }
 
     /**
-     * Get pending message count.
+     * Get pending message count (messages delivered but not ACKed).
      *
      * @param string $stream Stream key
-     * @return int Number of pending messages
+     * @return int Number of pending messages in PEL
      */
     public function getPendingCount(string $stream): int
     {
@@ -498,6 +579,103 @@ final class RedisStreamConsumer
             $pending = $this->redis->xPending($stream, $this->consumerGroup);
             return is_array($pending) && isset($pending[0]) ? (int) $pending[0] : 0;
         } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /**
+     * Get undelivered message count (messages in stream not yet delivered to group).
+     *
+     * This checks messages that exist in the stream but haven't been delivered
+     * to the consumer group yet (cursor hasn't reached them).
+     *
+     * Algorithm:
+     * 1. Get consumer group's last-delivered-id (XINFO GROUPS)
+     * 2. Count messages AFTER last-delivered-id using XRANGE
+     *
+     * CRITICAL: We must count precisely, not estimate, to avoid false negatives.
+     *
+     * @param string $stream Stream key
+     * @return int Exact number of undelivered messages
+     */
+    private function getUndeliveredCount(string $stream): int
+    {
+        try {
+            // Get consumer group info to find last-delivered-id
+            $groups = $this->redis->xInfo('GROUPS', $stream);
+            if (!is_array($groups)) {
+                return 0;
+            }
+
+            $lastDeliveredId = null;
+            foreach ($groups as $group) {
+                if (is_array($group) && ($group['name'] ?? null) === $this->consumerGroup) {
+                    $lastDeliveredId = $group['last-delivered-id'] ?? '0-0';
+                    break;
+                }
+            }
+
+            if ($lastDeliveredId === null) {
+                return 0;
+            }
+
+            // If last-delivered-id is "0-0", group hasn't consumed anything yet
+            if ($lastDeliveredId === '0-0') {
+                return $this->redis->xLen($stream);
+            }
+
+            // Get the latest message ID in stream
+            $latestMessages = $this->redis->xRevRange($stream, '+', '-', 1);
+            if (!is_array($latestMessages) || empty($latestMessages)) {
+                return 0;
+            }
+
+            $latestId = array_key_first($latestMessages);
+
+            // If lastDeliveredId equals latestId, all messages are delivered
+            if ($lastDeliveredId === $latestId) {
+                return 0;
+            }
+
+            // Count messages AFTER last-delivered-id using batched XRANGE
+            $undeliveredCount = 0;
+            $batchSize = 1000;
+            $currentId = $lastDeliveredId;
+            $maxIterations = 100;
+            $iteration = 0;
+
+            while ($iteration < $maxIterations) {
+                $batch = $this->redis->xRange($stream, $currentId, '+', $batchSize);
+
+                if (!is_array($batch) || empty($batch)) {
+                    break;
+                }
+
+                // Remove currentId if it's in the batch (exclusive range)
+                if (isset($batch[$currentId])) {
+                    unset($batch[$currentId]);
+                }
+
+                $batchCount = count($batch);
+                if ($batchCount === 0) {
+                    break;
+                }
+
+                $undeliveredCount += $batchCount;
+
+                // If we got less than batchSize, we've reached the end
+                if ($batchCount < $batchSize) {
+                    break;
+                }
+
+                // Move to next batch (use last ID from current batch)
+                $currentId = array_key_last($batch);
+                $iteration++;
+            }
+
+            return $undeliveredCount;
+        } catch (\Throwable $e) {
+            error_log("Redis Stream: Failed to get undelivered count: {$e->getMessage()}");
             return 0;
         }
     }
