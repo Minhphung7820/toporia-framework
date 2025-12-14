@@ -166,9 +166,11 @@ final class BrokerConsumeScaledCommand extends Command
         }
 
         $context = new ConsumerContext(
-            handlerName: $handler->getName(),
             driver: $driver,
-            processId: getmypid() ?: 0
+            handlerName: $handler->getName(),
+            channel: implode(', ', $handler->getChannels()),
+            processId: getmypid() ?: 0,
+            startedAt: microtime(true)
         );
 
         $handler->onStart($context);
@@ -213,7 +215,7 @@ final class BrokerConsumeScaledCommand extends Command
         }
 
         $batch[] = $message;
-        $context->messageCount++;
+        $context = $context->withMessageCount($context->messageCount + 1);
 
         // Check if we should process batch
         $shouldProcess = count($batch) >= $batchSize
@@ -226,7 +228,7 @@ final class BrokerConsumeScaledCommand extends Command
                 if ($handler instanceof BatchConsumerHandlerInterface) {
                     $failed = $handler->handleBatch($batch, $context);
                     if (!empty($failed)) {
-                        $context->errorCount += count($failed);
+                        $context = $context->withErrorCount($context->errorCount + count($failed));
                     }
                 } else {
                     // Process individually
@@ -234,7 +236,7 @@ final class BrokerConsumeScaledCommand extends Command
                         try {
                             $handler->handle($msg, $context);
                         } catch (\Throwable $e) {
-                            $context->errorCount++;
+                            $context = $context->withErrorCount($context->errorCount + 1);
                             $handler->onFailed($msg, $e, $context);
                         }
                     }
@@ -250,7 +252,7 @@ final class BrokerConsumeScaledCommand extends Command
                 ));
 
             } catch (\Throwable $e) {
-                $context->errorCount += count($batch);
+                $context = $context->withErrorCount($context->errorCount + count($batch));
                 $this->error("Batch processing failed: {$e->getMessage()}");
             }
 
