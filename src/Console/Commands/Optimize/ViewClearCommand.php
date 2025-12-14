@@ -48,12 +48,6 @@ final class ViewClearCommand extends Command
         return 0;
     }
 
-    private function getBasePath(): string
-    {
-        if (defined('APP_BASE_PATH')) {
-            return constant('APP_BASE_PATH');
-        }
-
         return getcwd() ?: dirname(__DIR__, 5);
     }
 }

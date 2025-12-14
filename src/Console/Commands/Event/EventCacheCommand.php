@@ -131,12 +131,6 @@ final class EventCacheCommand extends Command
         return $this->getBasePath() . '/bootstrap/cache/events.php';
     }
 
-    private function getBasePath(): string
-    {
-        if (defined('APP_BASE_PATH')) {
-            return constant('APP_BASE_PATH');
-        }
-
         return getcwd() ?: dirname(__DIR__, 5);
     }
 

@@ -195,12 +195,6 @@ final class MakeFactoryCommand extends Command
         return basename(str_replace('\\', '/', $class));
     }
 
-    private function getBasePath(): string
-    {
-        if (defined('APP_BASE_PATH')) {
-            return constant('APP_BASE_PATH');
-        }
-
         return getcwd() ?: dirname(__DIR__, 5);
     }
 

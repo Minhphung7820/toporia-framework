@@ -80,12 +80,6 @@ final class StorageLinkCommand extends Command
         return str_repeat('../', count($fromParts)) . implode('/', $toParts);
     }
 
-    private function getBasePath(): string
-    {
-        if (defined('APP_BASE_PATH')) {
-            return constant('APP_BASE_PATH');
-        }
-
         return getcwd() ?: dirname(__DIR__, 5);
     }
 }

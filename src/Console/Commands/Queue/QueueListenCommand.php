@@ -357,11 +357,6 @@ final class QueueListenCommand extends Command
      *
      * @return string
      */
-    private function getBasePath(): string
-    {
-        if (defined('APP_BASE_PATH')) {
-            return constant('APP_BASE_PATH');
-        }
 
         return getcwd() ?: dirname(__DIR__, 6);
     }
