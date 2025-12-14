@@ -67,5 +67,14 @@ final class OneTopicPerChannelStrategy implements TopicStrategyInterface
         }
         return array_unique($topics);
     }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function getPartitionCount(string $channel): int
+    {
+        // Legacy strategy: 1 partition per topic
+        return 1;
+    }
 }
 

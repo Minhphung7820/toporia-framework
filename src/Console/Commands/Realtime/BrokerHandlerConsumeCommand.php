@@ -123,6 +123,13 @@ final class BrokerHandlerConsumeCommand extends Command
                 return 1;
             }
 
+            // Set consumer group from handler (if specified) for Kafka
+            $handlerConsumerGroup = $this->handler->getConsumerGroup();
+            if ($handlerConsumerGroup !== null && $broker instanceof KafkaBroker) {
+                $broker->setConsumerGroup($handlerConsumerGroup);
+                $this->info("Using consumer group: {$handlerConsumerGroup}");
+            }
+
             $this->currentBroker = $broker;
 
             // Generate process ID and register

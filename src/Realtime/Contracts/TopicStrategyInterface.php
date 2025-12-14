@@ -60,4 +60,12 @@ interface TopicStrategyInterface
      * @return array<string> Unique topic names
      */
     public function getTopicsForChannels(array $channels): array;
+
+    /**
+     * Get number of partitions for a channel's topic.
+     *
+     * @param string $channel Channel name
+     * @return int Number of partitions
+     */
+    public function getPartitionCount(string $channel): int;
 }

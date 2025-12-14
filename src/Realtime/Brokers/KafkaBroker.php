@@ -7,7 +7,7 @@ namespace Toporia\Framework\Realtime\Brokers;
 use Toporia\Framework\Realtime\Brokers\CircuitBreaker\CircuitBreaker;
 use Toporia\Framework\Realtime\Brokers\Kafka\AsyncProducerQueue;
 use Toporia\Framework\Realtime\Brokers\Kafka\BatchProducer;
-use Toporia\Framework\Realtime\Brokers\Kafka\Client\{KafkaClientInterface, KafkaMessage, RdKafkaClientImproved};
+use Toporia\Framework\Realtime\Brokers\Kafka\Client\{KafkaClientInterface, KafkaMessage, RdKafkaClient};
 use Toporia\Framework\Realtime\Brokers\Kafka\DeadLetterQueue;
 use Toporia\Framework\Realtime\Brokers\Kafka\ProducerPool;
 use Toporia\Framework\Realtime\Brokers\Kafka\SharedMemoryQueue;
@@ -96,6 +96,16 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
     private int $poolSize;
 
     /**
+     * @var bool Whether to auto-create topics with partitions from config
+     */
+    private bool $autoCreateTopics;
+
+    /**
+     * @var array<string, bool> Topics that have been ensured to exist
+     */
+    private array $ensuredTopics = [];
+
+    /**
      * @param array<string, mixed> $config Kafka configuration
      * @param RealtimeManager|null $manager Realtime manager instance
      */
@@ -108,6 +118,7 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
         $this->useProducerPool = (bool) ($config['producer_pool'] ?? false);
         $this->useSharedMemory = (bool) ($config['shared_memory'] ?? false);
         $this->poolSize = (int) ($config['pool_size'] ?? 4);
+        $this->autoCreateTopics = (bool) ($config['auto_create_topics'] ?? true);
 
         // Core components
         $this->client = $this->createClient($config);
@@ -239,7 +250,7 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
         $producerConfig = $this->sanitizeConfig($config['producer_config'] ?? []);
         $consumerConfig = $this->sanitizeConfig($config['consumer_config'] ?? []);
 
-        return new RdKafkaClientImproved(
+        return new RdKafkaClient(
             brokers: $brokers,
             consumerGroup: $consumerGroup,
             manualCommit: $manualCommit,
@@ -262,6 +273,9 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
         $topicName = $this->topicStrategy->getTopicName($channel);
         $key = $this->topicStrategy->getMessageKey($channel);
         $payload = $message->toJson();
+
+        // Auto-create topic with configured partitions (only once per topic)
+        $this->ensureTopicWithPartitions($channel, $topicName);
 
         $startTime = microtime(true);
 
@@ -287,7 +301,6 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
             $duration = (microtime(true) - $startTime) * 1000;
             $this->metrics->recordPublish($topicName, $duration, true);
             BrokerMetrics::recordPublish('kafka', $channel, $duration, true);
-
         } catch (\Throwable $e) {
             $duration = (microtime(true) - $startTime) * 1000;
             $this->metrics->recordPublish($topicName, $duration, false);
@@ -566,7 +579,6 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
             $this->metrics->recordConsume($topic, count($messages), $duration, count($failed));
 
             $handler->onBatchSuccess($messages, $context, $duration);
-
         } catch (\Throwable $e) {
             $duration = (microtime(true) - $startTime) * 1000;
             $this->metrics->recordConsume($topic, 0, $duration, count($messages));
@@ -626,7 +638,6 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
             $duration = (microtime(true) - $startTime) * 1000;
             $this->metrics->recordConsume($topicName, 1, $duration);
             BrokerMetrics::recordConsume('kafka', 1, $duration);
-
         } catch (\Throwable $e) {
             $duration = (microtime(true) - $startTime) * 1000;
             $this->metrics->recordConsume($topicName, 0, $duration, 1);
@@ -762,6 +773,80 @@ final class KafkaBroker implements BrokerInterface, HealthCheckableInterface
 
         $this->metrics->recordConnection('disconnect');
         BrokerMetrics::recordConnectionEvent('kafka', 'disconnect');
+    }
+
+    /**
+     * Set consumer group and recreate client.
+     *
+     * This allows different handlers to use different consumer groups.
+     * Must be called before subscribing to topics.
+     *
+     * @param string $consumerGroup Consumer group ID
+     * @return void
+     */
+    public function setConsumerGroup(string $consumerGroup): void
+    {
+        // Disconnect current client if connected
+        if ($this->connected) {
+            $this->client->disconnect();
+            $this->connected = false;
+        }
+
+        // Create new client with new consumer group
+        $config = array_merge($this->config, ['consumer_group' => $consumerGroup]);
+        $this->client = $this->createClient($config);
+
+        // Reconnect
+        $this->connect();
+    }
+
+    /**
+     * Get current consumer group.
+     *
+     * @return string
+     */
+    public function getConsumerGroup(): string
+    {
+        return $this->config['consumer_group'] ?? 'realtime-servers';
+    }
+
+    /**
+     * Ensure topic exists with configured partitions.
+     *
+     * Only checks/creates once per topic per broker instance.
+     *
+     * @param string $channel Channel name (for partition lookup)
+     * @param string $topicName Topic name
+     * @return void
+     */
+    private function ensureTopicWithPartitions(string $channel, string $topicName): void
+    {
+        // Skip if auto-create is disabled
+        if (!$this->autoCreateTopics) {
+            return;
+        }
+
+        // Skip if already ensured this topic
+        if (isset($this->ensuredTopics[$topicName])) {
+            return;
+        }
+
+        // Mark as ensured (even if creation fails, we don't want to retry every publish)
+        $this->ensuredTopics[$topicName] = true;
+
+        // Get partition count from topic strategy
+        $partitions = $this->topicStrategy->getPartitionCount($channel);
+
+        try {
+            $created = $this->client->ensureTopicExists($topicName, $partitions);
+            if ($created) {
+                // Log only when topic is actually created/altered
+                error_log("[KafkaBroker] Ensured topic '{$topicName}' with {$partitions} partitions");
+            }
+        } catch (\Throwable $e) {
+            // Log but don't fail - topic might already exist or be created by another process
+            error_log("[KafkaBroker] Warning: Could not ensure topic '{$topicName}': {$e->getMessage()}");
+        }
     }
 
     /**

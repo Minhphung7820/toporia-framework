@@ -105,4 +105,16 @@ interface KafkaClientInterface
      * @return void
      */
     public function commit(KafkaMessage $message): void;
+
+    /**
+     * Ensure a topic exists with the specified number of partitions.
+     *
+     * Creates the topic if it doesn't exist, or validates partition count if it does.
+     *
+     * @param string $topic Topic name
+     * @param int $partitions Number of partitions
+     * @param int $replicationFactor Replication factor (default: 1)
+     * @return bool True if topic was created, false if already exists
+     */
+    public function ensureTopicExists(string $topic, int $partitions = 1, int $replicationFactor = 1): bool;
 }

@@ -153,6 +153,7 @@ final class ConsoleServiceProvider extends ServiceProvider
       'broker:consume-scaled' => \Toporia\Framework\Console\Commands\Realtime\BrokerConsumeScaledCommand::class,
       'broker:metrics' => \Toporia\Framework\Console\Commands\Realtime\BrokerMetricsCommand::class,
       'kafka:flush-worker' => \Toporia\Framework\Console\Commands\Realtime\KafkaFlushWorkerCommand::class,
+      'kafka:topics' => \Toporia\Framework\Console\Commands\Realtime\KafkaTopicsCommand::class,
 
       // Notification commands
       'notification:table' => \Toporia\Framework\Console\Commands\Notification\NotificationTableCommand::class,

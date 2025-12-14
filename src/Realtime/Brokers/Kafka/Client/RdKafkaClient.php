@@ -4,115 +4,59 @@ declare(strict_types=1);
 
 namespace Toporia\Framework\Realtime\Brokers\Kafka\Client;
 
-use Toporia\Framework\Realtime\Exceptions\BrokerException;
-use Toporia\Framework\Realtime\Exceptions\BrokerTemporaryException;
+use RdKafka;
+use Toporia\Framework\Realtime\Exceptions\{BrokerException, BrokerTemporaryException};
+use Toporia\Framework\Realtime\Metrics\BrokerMetrics;
 
 /**
  * Class RdKafkaClient
  *
  * High-performance Kafka client using rdkafka extension (librdkafka).
- * Optimized for large-scale production with 100k+ requests/second.
- *
- * Performance optimizations:
- * - Singleton producer pattern (reuse across requests)
- * - Async produce with batched delivery
- * - Non-blocking poll with periodic background flush
- * - Connection pooling ready
- * - Graceful shutdown with pending message flush
- *
- * Throughput: 100k-500k+ msg/s
- * Latency: 1-10ms (async), 10-50ms (sync)
+ * Features backpressure, delivery tracking, metrics, and topic management.
  *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
  * @version     3.0.0
  * @package     toporia/framework
+ * @subpackage  Realtime\Brokers\Kafka\Client
+ * @since       2025-12-10
+ *
+ * @link        https://github.com/Minhphung7820/toporia
  */
 final class RdKafkaClient implements KafkaClientInterface
 {
-    /**
-     * Singleton producer instance for connection reuse.
-     */
-    private static ?\RdKafka\Producer $sharedProducer = null;
-
-    /**
-     * Track if shutdown handler is registered.
-     */
-    private static bool $shutdownRegistered = false;
-
-    /**
-     * Pending messages counter for monitoring.
-     */
-    private static int $pendingMessages = 0;
-
-    /**
-     * Last poll timestamp for periodic polling.
-     */
-    private static float $lastPollTime = 0;
-
-    /**
-     * Delivery tracking for async reliability.
-     *
-     * @var array<string, array{status: string, error: string|null, timestamp: float}>
-     */
-    private static array $deliveryResults = [];
-
-    /**
-     * Instance-level producer (fallback if singleton disabled).
-     */
-    private ?\RdKafka\Producer $producer = null;
-
-    private ?\RdKafka\KafkaConsumer $consumer = null;
+    private ?RdKafka\Producer $producer = null;
+    private ?RdKafka\KafkaConsumer $consumer = null;
     private bool $connected = false;
     private bool $consuming = false;
 
     /**
-     * @var array<string, \RdKafka\ProducerTopic> Topic cache
+     * @var array<string, array{topic: RdKafka\ProducerTopic, created_at: int}> Topic cache with TTL
      */
     private array $topicCache = [];
 
     /**
-     * Error recovery state.
+     * @var array<string, array{status: string, error: string|null, timestamp: float}> Delivery tracking
      */
+    private array $deliveryResults = [];
+
+    /**
+     * @var int Pending message counter for backpressure
+     */
+    private int $pendingMessages = 0;
+
     private int $consecutiveErrors = 0;
+    private int $lastErrorTime = 0;
 
-    /**
-     * Track failed deliveries for monitoring.
-     */
-    private int $failedDeliveries = 0;
-
-    /**
-     * Track successful deliveries.
-     */
-    private static int $successfulDeliveries = 0;
-
-    /**
-     * Use singleton producer for connection reuse.
-     */
-    private readonly bool $useSingleton;
-
-    /**
-     * Poll interval in milliseconds.
-     */
-    private readonly int $pollIntervalMs;
-
-    /**
-     * Maximum pending messages before applying backpressure.
-     */
-    private const MAX_PENDING_MESSAGES = 10000;
-
-    /**
-     * Default wait timeout for delivery confirmation (ms).
-     */
-    private const DEFAULT_DELIVERY_WAIT_MS = 100;
+    private const TOPIC_CACHE_TTL = 3600; // 1 hour
+    private const MAX_PENDING_MESSAGES = 10000; // Backpressure threshold (10x higher for high throughput)
+    private const POLL_INTERVAL_MS = 5; // Poll interval for delivery callbacks (faster polling)
 
     /**
      * @param array<string> $brokers Broker addresses
      * @param string $consumerGroup Consumer group ID
      * @param bool $manualCommit Enable manual offset commit
-     * @param int $bufferSize Message buffer size (used for batch processing)
-     * @param int $flushIntervalMs Flush interval in milliseconds
      * @param array<string, string> $producerConfig Additional producer config
      * @param array<string, string> $consumerConfig Additional consumer config
      */
@@ -120,18 +64,12 @@ final class RdKafkaClient implements KafkaClientInterface
         private readonly array $brokers,
         private readonly string $consumerGroup = 'realtime-servers',
         private readonly bool $manualCommit = false,
-        private readonly int $bufferSize = 100,
-        private readonly int $flushIntervalMs = 100,
         private readonly array $producerConfig = [],
         private readonly array $consumerConfig = []
     ) {
         if (empty($this->brokers)) {
             throw BrokerException::invalidConfiguration('kafka', 'Broker list is required');
         }
-
-        // Enable singleton by default for HTTP requests (high performance)
-        $this->useSingleton = (bool) ($producerConfig['singleton'] ?? true);
-        $this->pollIntervalMs = (int) ($producerConfig['poll_interval_ms'] ?? 10);
     }
 
     public function getName(): string
@@ -156,178 +94,95 @@ final class RdKafkaClient implements KafkaClientInterface
 
         $brokerList = implode(',', $this->brokers);
 
-        // Initialize producer (singleton or instance)
-        $this->producer = $this->getOrCreateProducer($brokerList);
-
-        // Initialize consumer
-        $this->consumer = $this->createConsumer($brokerList);
-
-        // Register shutdown handler for graceful flush
-        $this->registerShutdownHandler();
-
-        $this->connected = true;
-    }
-
-    /**
-     * Get or create singleton producer for connection reuse.
-     */
-    private function getOrCreateProducer(string $brokerList): \RdKafka\Producer
-    {
-        // Use singleton for better performance
-        if ($this->useSingleton && self::$sharedProducer !== null) {
-            return self::$sharedProducer;
-        }
-
-        $producerConf = new \RdKafka\Conf();
+        // Initialize producer with delivery report callback
+        $producerConf = new RdKafka\Conf();
         $producerConf->set('bootstrap.servers', $brokerList);
-        $producerConf->set('log_level', '3');
+        $producerConf->set('metadata.broker.list', $brokerList);
 
-        // ========== HIGH THROUGHPUT CONFIG ==========
-        // Acks: 1 = leader only (fast), 'all' = all replicas (durable)
-        $producerConf->set('acks', '1');
+        // === HIGH THROUGHPUT PRODUCER SETTINGS ===
+        // These settings optimize for 100K+ msg/s throughput
 
-        // Batching - maximize throughput
-        $producerConf->set('queue.buffering.max.ms', '10');        // 10ms batching window
-        $producerConf->set('queue.buffering.max.messages', '100000'); // 100k message buffer
-        $producerConf->set('batch.num.messages', '10000');         // Batch up to 10k msgs
-        $producerConf->set('batch.size', '1048576');               // 1MB batch size
-        $producerConf->set('linger.ms', '5');                      // Wait 5ms to batch
-
-        // Compression - lz4 is fastest
-        $producerConf->set('compression.type', 'lz4');
-        $producerConf->set('compression.level', '1');              // Fast compression
-
-        // Reliability - retries without idempotence for faster startup
-        // Idempotence requires PID from broker which can cause "Coordinator load in progress" errors
+        // Idempotence is optional - disable by default for faster startup
         // Delivery callbacks already ensure reliability
-        $producerConf->set('retries', '3');
+        // Set 'enable.idempotence' => 'true' in producer_config if needed
+        $producerConf->set('enable.idempotence', 'false');
+
+        // Retries for reliability (works without idempotence)
+        $producerConf->set('retries', '5');
         $producerConf->set('retry.backoff.ms', '100');
-        $producerConf->set('request.timeout.ms', '5000');          // 5s timeout
-        $producerConf->set('message.timeout.ms', '30000');         // 30s total timeout
-        $producerConf->set('enable.idempotence', 'false');         // Disable for speed & avoid PID issues
+        $producerConf->set('retry.backoff.max.ms', '1000');
 
-        // Socket optimization
+        // Queue buffering for high throughput batching
+        $producerConf->set('queue.buffering.max.messages', '100000');
+        $producerConf->set('queue.buffering.max.ms', '5'); // linger.ms equivalent
+        $producerConf->set('queue.buffering.max.kbytes', '1048576'); // 1GB
+
+        // Socket settings for high throughput
         $producerConf->set('socket.keepalive.enable', 'true');
-        $producerConf->set('socket.nagle.disable', 'true');
-        $producerConf->set('socket.send.buffer.bytes', '1048576'); // 1MB send buffer
-        $producerConf->set('socket.receive.buffer.bytes', '1048576');
+        $producerConf->set('socket.nagle.disable', 'true'); // Disable Nagle for low latency
 
-        // Connection pooling
-        $producerConf->set('connections.max.idle.ms', '540000');   // 9 min idle timeout
+        // Request and message timeout
+        $producerConf->set('request.timeout.ms', '30000');
+        $producerConf->set('message.timeout.ms', '300000'); // 5 minutes
 
-        // Error callback - minimal logging
-        $producerConf->setErrorCb(function ($kafka, $err, $reason): void {
-            if ($err !== RD_KAFKA_RESP_ERR__TRANSPORT && $err !== RD_KAFKA_RESP_ERR_NO_ERROR) {
-                error_log("[Kafka] Error {$err}: {$reason}");
-            }
+        // Set delivery report callback for async reliability
+        $producerConf->setDrMsgCb(function (RdKafka\Producer $producer, RdKafka\Message $message) {
+            unset($producer); // Required by callback signature but unused
+            $this->handleDeliveryReport($message);
         });
 
-        // Delivery report - track success/failure with message ID
-        $producerConf->setDrMsgCb(function ($_kafka, $message): void {
-            self::$pendingMessages = max(0, self::$pendingMessages - 1);
-
-            // Get message ID from opaque data if available
-            $messageId = null;
-            if (property_exists($message, 'opaque') && $message->opaque !== null) {
-                $messageId = $message->opaque;
-            }
-
-            if ($message->err) {
-                $this->failedDeliveries++;
-                $errorMsg = rd_kafka_err2str($message->err);
-
-                // Update delivery tracking
-                if ($messageId !== null && isset(self::$deliveryResults[$messageId])) {
-                    self::$deliveryResults[$messageId]['status'] = 'failed';
-                    self::$deliveryResults[$messageId]['error'] = $errorMsg;
-                }
-
-                error_log("[Kafka] Delivery failed: {$errorMsg}");
-            } else {
-                self::$successfulDeliveries++;
-
-                // Update delivery tracking
-                if ($messageId !== null && isset(self::$deliveryResults[$messageId])) {
-                    self::$deliveryResults[$messageId]['status'] = 'delivered';
-                }
-            }
-        });
-
-        // Apply custom overrides
+        // Apply user config (can override defaults)
         foreach ($this->producerConfig as $key => $value) {
-            if ($key === 'singleton' || $key === 'poll_interval_ms') {
-                continue;
-            }
             $producerConf->set($key, (string) $value);
         }
 
-        $producer = new \RdKafka\Producer($producerConf);
-        $producer->addBrokers($brokerList);
+        $this->producer = new RdKafka\Producer($producerConf);
+        $this->producer->addBrokers($brokerList);
 
-        // Store as singleton if enabled
-        if ($this->useSingleton) {
-            self::$sharedProducer = $producer;
-        }
-
-        return $producer;
-    }
-
-    /**
-     * Create consumer instance.
-     */
-    private function createConsumer(string $brokerList): \RdKafka\KafkaConsumer
-    {
-        $consumerConf = new \RdKafka\Conf();
+        // === HIGH THROUGHPUT CONSUMER SETTINGS ===
+        $consumerConf = new RdKafka\Conf();
         $consumerConf->set('bootstrap.servers', $brokerList);
+        $consumerConf->set('metadata.broker.list', $brokerList);
         $consumerConf->set('group.id', $this->consumerGroup);
-        $consumerConf->set('log_level', '3');
-
-        // Auto-commit for simplicity
         $consumerConf->set('enable.auto.commit', $this->manualCommit ? 'false' : 'true');
         $consumerConf->set('auto.offset.reset', 'earliest');
-        $consumerConf->set('auto.commit.interval.ms', '1000');
 
-        // Low latency fetching
-        $consumerConf->set('fetch.wait.max.ms', '50');
-        $consumerConf->set('fetch.min.bytes', '1');
-        $consumerConf->set('fetch.max.bytes', '1048576');
+        // Session management for consumer group stability
+        $consumerConf->set('session.timeout.ms', '30000'); // 30s session timeout
+        $consumerConf->set('heartbeat.interval.ms', '10000'); // 10s heartbeat (1/3 of session timeout)
+        $consumerConf->set('max.poll.interval.ms', '300000'); // 5 min max processing time
 
-        // Session management
-        $consumerConf->set('session.timeout.ms', '30000');
-        $consumerConf->set('heartbeat.interval.ms', '10000');
-        $consumerConf->set('max.poll.interval.ms', '300000');
+        // Fetch settings for high throughput
+        $consumerConf->set('fetch.min.bytes', '1'); // Respond immediately with any data
+        $consumerConf->set('fetch.wait.max.ms', '100'); // Max wait time for fetch.min.bytes
+        $consumerConf->set('fetch.max.bytes', '52428800'); // 50MB max fetch
+        $consumerConf->set('max.partition.fetch.bytes', '1048576'); // 1MB per partition
 
-        // Error callback
-        $consumerConf->setErrorCb(function ($kafka, $err, $reason): void {
-            if ($err !== RD_KAFKA_RESP_ERR__TRANSPORT && $err !== RD_KAFKA_RESP_ERR_NO_ERROR) {
-                error_log("[Kafka] Consumer error {$err}: {$reason}");
+        // Socket settings
+        $consumerConf->set('socket.keepalive.enable', 'true');
+
+        // Rebalance callback
+        $consumerConf->setRebalanceCb(function (RdKafka\KafkaConsumer $consumer, int $err, ?array $partitions) {
+            switch ($err) {
+                case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
+                    $consumer->assign($partitions);
+                    break;
+
+                case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
+                    $consumer->assign(null);
+                    break;
             }
         });
 
+        // Apply user config (can override defaults)
         foreach ($this->consumerConfig as $key => $value) {
             $consumerConf->set($key, (string) $value);
         }
 
-        return new \RdKafka\KafkaConsumer($consumerConf);
-    }
+        $this->consumer = new RdKafka\KafkaConsumer($consumerConf);
 
-    /**
-     * Register shutdown handler for graceful message flush.
-     */
-    private function registerShutdownHandler(): void
-    {
-        if (self::$shutdownRegistered) {
-            return;
-        }
-
-        register_shutdown_function(function (): void {
-            if (self::$sharedProducer !== null && self::$pendingMessages > 0) {
-                // Flush remaining messages on shutdown
-                self::$sharedProducer->flush(5000);
-            }
-        });
-
-        self::$shutdownRegistered = true;
+        $this->connected = true;
+        BrokerMetrics::recordConnectionEvent('kafka', 'connect');
     }
 
     public function disconnect(): void
@@ -338,348 +193,192 @@ final class RdKafkaClient implements KafkaClientInterface
 
         $this->stopConsuming();
 
-        // Flush pending messages
-        if ($this->producer !== null && !$this->useSingleton) {
-            $this->producer->flush(2000);
-            $this->producer = null;
+        // Adaptive flush based on pending messages and context
+        // - HTTP: Quick flush but ensure queued messages are sent
+        // - CLI: Full flush with retries for reliability
+        $outQLen = $this->producer?->getOutQLen() ?? 0;
+
+        if ($outQLen > 0) {
+            // Calculate timeout based on queue length (10ms per message, min 100ms, max 2000ms for HTTP)
+            $baseTimeout = PHP_SAPI === 'cli' ? 5000 : min(max($outQLen * 10, 100), 2000);
+            $this->flush($baseTimeout);
         }
 
         if ($this->consumer !== null) {
             try {
                 $this->consumer->unsubscribe();
             } catch (\Throwable) {
-                // Ignore
+                // Ignore unsubscribe errors during disconnect
             }
             $this->consumer = null;
         }
 
+        $this->producer = null;
         $this->topicCache = [];
+        $this->deliveryResults = [];
+        $this->pendingMessages = 0;
         $this->connected = false;
+
+        BrokerMetrics::recordConnectionEvent('kafka', 'disconnect');
     }
 
-    /**
-     * High-performance async publish with delivery tracking.
-     *
-     * Strategy:
-     * - Fire-and-forget to librdkafka internal queue
-     * - Track delivery via callbacks with message ID
-     * - Apply backpressure when queue is full
-     * - Short wait for delivery confirmation (default 100ms)
-     *
-     * Performance:
-     * - Latency: 1-100ms (with delivery wait)
-     * - Throughput: 10k-100k+ msg/s
-     */
     public function publish(string $topic, string $payload, ?int $partition = null, ?string $key = null): void
     {
         if (!$this->connected || $this->producer === null) {
             throw BrokerException::notConnected('kafka');
         }
 
-        // Apply backpressure if too many pending messages
+        // Backpressure: wait if too many pending messages
         $this->applyBackpressure();
 
-        // Get or create cached topic
-        if (!isset($this->topicCache[$topic])) {
-            $this->topicCache[$topic] = $this->producer->newTopic($topic);
-        }
+        // Get or create cached topic with TTL check
+        $topicInstance = $this->getTopicInstance($topic);
+        $partitionVal = $partition ?? RD_KAFKA_PARTITION_UA;
 
-        $topicInstance = $this->topicCache[$topic];
-        $partitionValue = $partition ?? RD_KAFKA_PARTITION_UA;
-
-        // Generate message ID for tracking
+        // Generate unique message ID for tracking
         $messageId = $this->generateMessageId();
 
-        // Initialize delivery tracking
-        self::$deliveryResults[$messageId] = [
-            'status' => 'pending',
-            'error' => null,
-            'timestamp' => microtime(true),
-        ];
+        try {
+            // Initialize delivery tracking
+            $this->deliveryResults[$messageId] = [
+                'status' => 'pending',
+                'error' => null,
+                'timestamp' => microtime(true),
+            ];
+            $this->pendingMessages++;
 
-        // Produce to internal queue with message ID as opaque
-        if ($key !== null && method_exists($topicInstance, 'producev')) {
-            $topicInstance->producev(
-                $partitionValue,
-                0,
-                $payload,
-                $key,
-                null,  // headers
-                null,  // timestamp_ms
-                $messageId // opaque for tracking
-            );
-        } else {
-            $topicInstance->produce($partitionValue, 0, $payload, $key);
-        }
+            // Produce message with opaque data for tracking
+            if ($key !== null && method_exists($topicInstance, 'producev')) {
+                // producev supports headers and opaque
+                $topicInstance->producev(
+                    $partitionVal,
+                    0, // msgflags
+                    $payload,
+                    $key,
+                    null, // headers
+                    null, // timestamp_ms
+                    $messageId // opaque - used to track delivery
+                );
+            } else {
+                $topicInstance->produce($partitionVal, 0, $payload, $key);
+            }
 
-        self::$pendingMessages++;
+            // In HTTP context: synchronously flush to ensure delivery before request ends
+            // In CLI context: async batching is OK, flush happens periodically or on disconnect
+            if (PHP_SAPI !== 'cli') {
+                // HTTP: must ensure message is delivered before response
+                $this->producer->poll(0);
+                $result = $this->producer->flush(100); // 100ms flush timeout
 
-        // Non-blocking poll to trigger delivery callbacks
-        $this->producer->poll(0);
+                if ($result !== RD_KAFKA_RESP_ERR_NO_ERROR) {
+                    // Retry once with longer timeout
+                    $this->producer->poll(50);
+                    $this->producer->flush(200);
+                }
+            } else {
+                // CLI: non-blocking poll, delivery happens async
+                $this->producer->poll(0);
+            }
 
-        // Wait for delivery confirmation with short timeout
-        // This ensures reliability for realtime notifications
-        if (!$this->consuming) {
-            $this->waitForDelivery($messageId, self::DEFAULT_DELIVERY_WAIT_MS);
-        }
-
-        // Periodic cleanup of stale delivery results
-        $now = microtime(true) * 1000;
-        if ($now - self::$lastPollTime >= 5000) { // Every 5 seconds
-            $this->cleanupStaleDeliveryResults();
-            self::$lastPollTime = $now;
+        } catch (\Throwable $e) {
+            $this->pendingMessages = max(0, $this->pendingMessages - 1);
+            unset($this->deliveryResults[$messageId]);
+            BrokerMetrics::recordError('kafka', 'publish');
+            throw BrokerException::publishFailed('kafka', $topic, $e->getMessage(), $e);
         }
     }
 
     /**
-     * Synchronous publish with guaranteed delivery confirmation.
-     * Use this when you MUST guarantee delivery before returning.
+     * Publish message synchronously with guaranteed delivery confirmation.
+     *
+     * Use this for critical messages that MUST be delivered.
+     * For realtime notifications, use publish() for better throughput.
      *
      * @param string $topic Topic name
      * @param string $payload Message payload
      * @param int|null $partition Partition number
      * @param string|null $key Message key
      * @param int $timeoutMs Maximum wait time for delivery confirmation
-     * @return bool True if delivered successfully
-     * @throws BrokerException If delivery fails
+     * @throws BrokerException If delivery fails or times out
      */
-    public function publishSync(string $topic, string $payload, ?int $partition = null, ?string $key = null, int $timeoutMs = 5000): bool
+    public function publishSync(string $topic, string $payload, ?int $partition = null, ?string $key = null, int $timeoutMs = 5000): void
     {
         if (!$this->connected || $this->producer === null) {
             throw BrokerException::notConnected('kafka');
         }
 
-        // Get or create cached topic
-        if (!isset($this->topicCache[$topic])) {
-            $this->topicCache[$topic] = $this->producer->newTopic($topic);
-        }
-
-        $topicInstance = $this->topicCache[$topic];
-        $partitionValue = $partition ?? RD_KAFKA_PARTITION_UA;
-
-        // Generate message ID for tracking
+        $topicInstance = $this->getTopicInstance($topic);
+        $partitionVal = $partition ?? RD_KAFKA_PARTITION_UA;
         $messageId = $this->generateMessageId();
 
-        // Initialize delivery tracking
-        self::$deliveryResults[$messageId] = [
-            'status' => 'pending',
-            'error' => null,
-            'timestamp' => microtime(true),
-        ];
+        try {
+            $this->deliveryResults[$messageId] = [
+                'status' => 'pending',
+                'error' => null,
+                'timestamp' => microtime(true),
+            ];
+            $this->pendingMessages++;
 
-        // Produce with message ID as opaque
-        if ($key !== null && method_exists($topicInstance, 'producev')) {
-            $topicInstance->producev(
-                $partitionValue,
-                0,
-                $payload,
-                $key,
-                null,
-                null,
-                $messageId
-            );
-        } else {
-            $topicInstance->produce($partitionValue, 0, $payload, $key);
-        }
+            if ($key !== null && method_exists($topicInstance, 'producev')) {
+                $topicInstance->producev($partitionVal, 0, $payload, $key, null, null, $messageId);
+            } else {
+                $topicInstance->produce($partitionVal, 0, $payload, $key);
+            }
 
-        self::$pendingMessages++;
+            // Poll and wait for delivery confirmation
+            $delivered = $this->waitForDelivery($messageId, $timeoutMs);
 
-        // Wait for delivery confirmation
-        $delivered = $this->waitForDelivery($messageId, $timeoutMs);
+            if (!$delivered) {
+                $result = $this->deliveryResults[$messageId] ?? null;
+                $error = $result['error'] ?? 'Delivery timeout';
+                throw new \RuntimeException("Message delivery failed: {$error}");
+            }
 
-        // Cleanup tracking
-        $result = self::$deliveryResults[$messageId] ?? null;
-        unset(self::$deliveryResults[$messageId]);
+            // Check if delivery was successful
+            $result = $this->deliveryResults[$messageId] ?? null;
+            if ($result && $result['status'] === 'failed') {
+                throw new \RuntimeException("Message delivery failed: {$result['error']}");
+            }
 
-        if (!$delivered) {
-            $error = $result['error'] ?? 'Delivery timeout';
-            throw BrokerException::publishFailed('kafka', $topic, "Sync delivery failed: {$error}");
-        }
-
-        if ($result && $result['status'] === 'failed') {
-            throw BrokerException::publishFailed('kafka', $topic, "Delivery failed: {$result['error']}");
-        }
-
-        return true;
-    }
-
-    /**
-     * Flush pending messages.
-     * Call this periodically in long-running processes or before shutdown.
-     */
-    public function flush(int $timeoutMs = 5000): void
-    {
-        if ($this->producer !== null) {
-            $this->producer->flush($timeoutMs);
+        } catch (\Throwable $e) {
+            $this->pendingMessages = max(0, $this->pendingMessages - 1);
+            unset($this->deliveryResults[$messageId]);
+            BrokerMetrics::recordError('kafka', 'publish_sync');
+            throw BrokerException::publishFailed('kafka', $topic, $e->getMessage(), $e);
+        } finally {
+            unset($this->deliveryResults[$messageId]);
         }
     }
 
     /**
-     * Poll for delivery callbacks.
-     * Call this periodically in long-running processes.
+     * Handle delivery report callback.
      *
-     * @param int $timeoutMs Poll timeout (0 = non-blocking)
-     * @return int Number of events processed
+     * @param RdKafka\Message $message
      */
-    public function poll(int $timeoutMs = 0): int
+    private function handleDeliveryReport(RdKafka\Message $message): void
     {
-        if ($this->producer === null) {
-            return 0;
+        $this->pendingMessages = max(0, $this->pendingMessages - 1);
+
+        // Try to get message ID from opaque data
+        $messageId = null;
+        if (property_exists($message, 'opaque') && $message->opaque !== null) {
+            $messageId = $message->opaque;
         }
 
-        return $this->producer->poll($timeoutMs) ?? 0;
-    }
-
-    public function subscribe(array $topics): void
-    {
-        if (!$this->connected || $this->consumer === null) {
-            throw BrokerException::notConnected('kafka');
-        }
-
-        try {
-            $this->consumer->subscribe($topics);
-            // Brief wait for partition assignment
-            $this->consumer->consume(200);
-        } catch (\Throwable $e) {
-            throw BrokerException::subscribeFailed('kafka', implode(',', $topics), $e->getMessage(), $e);
-        }
-    }
-
-    /**
-     * Consume messages with optimized batch processing.
-     */
-    public function consume(callable $callback, int $timeoutMs = 1000, int $batchSize = 100): void
-    {
-        if (!$this->connected || $this->consumer === null) {
-            throw BrokerException::notConnected('kafka');
-        }
-
-        $this->consuming = true;
-        $this->consecutiveErrors = 0;
-        $messagesProcessed = 0;
-
-        while ($this->consuming && $messagesProcessed < $batchSize) {
-            try {
-                $message = $this->consumer->consume($timeoutMs);
-
-                if ($message === null) {
-                    return;
-                }
-
-                $kafkaMessage = KafkaMessage::fromRdKafka($message);
-
-                if ($kafkaMessage->hasError()) {
-                    if ($kafkaMessage->isEof() || $kafkaMessage->isTimeout()) {
-                        $this->consecutiveErrors = 0;
-                        return;
-                    }
-
-                    if ($kafkaMessage->isUnknownTopicOrPartition()) {
-                        $this->handleUnknownTopicError();
-                        return;
-                    }
-
-                    $this->consecutiveErrors++;
-                    if ($this->consecutiveErrors > 3) {
-                        throw BrokerException::consumeFailed('kafka', $kafkaMessage->errorMessage);
-                    }
-                    continue;
-                }
-
-                $this->consecutiveErrors = 0;
-
-                if ($callback($kafkaMessage) === false) {
-                    break;
-                }
-
-                $messagesProcessed++;
-
-                // Periodic producer poll during consumption
-                if ($messagesProcessed % 10 === 0) {
-                    $this->producer?->poll(0);
-                }
-
-            } catch (BrokerException $e) {
-                throw $e;
-            } catch (\Throwable $e) {
-                $this->consecutiveErrors++;
-                if ($this->consecutiveErrors >= 5) {
-                    throw BrokerException::consumeFailed('kafka', $e->getMessage(), $e);
-                }
+        if ($message->err === RD_KAFKA_RESP_ERR_NO_ERROR) {
+            // Success
+            if ($messageId !== null && isset($this->deliveryResults[$messageId])) {
+                $this->deliveryResults[$messageId]['status'] = 'delivered';
             }
-        }
-    }
-
-    public function stopConsuming(): void
-    {
-        $this->consuming = false;
-    }
-
-    public function commit(KafkaMessage $message): void
-    {
-        if (!$this->manualCommit || $this->consumer === null || $message->raw === null) {
-            return;
-        }
-
-        try {
-            $this->consumer->commit($message->raw);
-        } catch (\Throwable $e) {
-            if (!str_contains($e->getMessage(), 'precision')) {
-                error_log("Commit failed: {$e->getMessage()}");
+            BrokerMetrics::recordPublish('kafka', $message->topic_name ?? 'unknown', 0, true);
+        } else {
+            // Failure
+            $errorMsg = rd_kafka_err2str($message->err);
+            if ($messageId !== null && isset($this->deliveryResults[$messageId])) {
+                $this->deliveryResults[$messageId]['status'] = 'failed';
+                $this->deliveryResults[$messageId]['error'] = $errorMsg;
             }
-        }
-    }
-
-    /**
-     * Get failed delivery count for monitoring.
-     */
-    public function getFailedDeliveries(): int
-    {
-        return $this->failedDeliveries;
-    }
-
-    /**
-     * Get successful delivery count for monitoring.
-     */
-    public static function getSuccessfulDeliveries(): int
-    {
-        return self::$successfulDeliveries;
-    }
-
-    /**
-     * Get pending messages count.
-     */
-    public static function getPendingMessages(): int
-    {
-        return self::$pendingMessages;
-    }
-
-    /**
-     * Reset failed delivery counter.
-     */
-    public function resetFailedDeliveries(): void
-    {
-        $this->failedDeliveries = 0;
-    }
-
-    /**
-     * Reset all static counters (for testing).
-     */
-    public static function resetCounters(): void
-    {
-        self::$pendingMessages = 0;
-        self::$successfulDeliveries = 0;
-        self::$lastPollTime = 0;
-        self::$deliveryResults = [];
-    }
-
-    /**
-     * Force flush shared producer (for testing/monitoring).
-     */
-    public static function flushShared(int $timeoutMs = 5000): void
-    {
-        if (self::$sharedProducer !== null) {
-            self::$sharedProducer->flush($timeoutMs);
+            BrokerMetrics::recordPublish('kafka', $message->topic_name ?? 'unknown', 0, false);
         }
     }
 
@@ -688,24 +387,19 @@ final class RdKafkaClient implements KafkaClientInterface
      *
      * @param string $messageId Message ID to wait for
      * @param int $timeoutMs Timeout in milliseconds
-     * @return bool True if delivered, false if still pending/failed
+     * @return bool True if delivered, false if still pending
      */
     private function waitForDelivery(string $messageId, int $timeoutMs): bool
     {
-        if ($this->producer === null) {
-            return false;
-        }
-
         $startTime = microtime(true) * 1000;
         $endTime = $startTime + $timeoutMs;
-        $pollInterval = min(10, $this->pollIntervalMs); // 10ms max poll interval
 
         while (microtime(true) * 1000 < $endTime) {
             // Poll for delivery callbacks
-            $this->producer->poll($pollInterval);
+            $this->producer->poll(self::POLL_INTERVAL_MS);
 
             // Check if this message was delivered
-            $result = self::$deliveryResults[$messageId] ?? null;
+            $result = $this->deliveryResults[$messageId] ?? null;
             if ($result && $result['status'] !== 'pending') {
                 return $result['status'] === 'delivered';
             }
@@ -724,19 +418,15 @@ final class RdKafkaClient implements KafkaClientInterface
      */
     private function applyBackpressure(): void
     {
-        if (self::$pendingMessages < self::MAX_PENDING_MESSAGES) {
-            return;
-        }
-
-        if ($this->producer === null) {
+        if ($this->pendingMessages < self::MAX_PENDING_MESSAGES) {
             return;
         }
 
         // Too many pending messages, wait for some to be delivered
-        $maxWaitMs = 2000; // 2 seconds max wait
+        $maxWaitMs = 1000; // 1 second max wait
         $startTime = microtime(true) * 1000;
 
-        while (self::$pendingMessages >= self::MAX_PENDING_MESSAGES) {
+        while ($this->pendingMessages >= self::MAX_PENDING_MESSAGES) {
             $this->producer->poll(50); // Poll for callbacks
 
             if (microtime(true) * 1000 - $startTime > $maxWaitMs) {
@@ -744,7 +434,7 @@ final class RdKafkaClient implements KafkaClientInterface
                 throw BrokerException::publishFailed(
                     'kafka',
                     'backpressure',
-                    "Too many pending messages (" . self::$pendingMessages . "), producer is overloaded"
+                    "Too many pending messages ({$this->pendingMessages}), producer is overloaded"
                 );
             }
         }
@@ -760,23 +450,214 @@ final class RdKafkaClient implements KafkaClientInterface
         return bin2hex(random_bytes(16));
     }
 
-    /**
-     * Cleanup stale delivery results (older than 60 seconds).
-     *
-     * Prevents memory leaks in long-running processes.
-     */
-    public function cleanupStaleDeliveryResults(): void
+    public function flush(int $timeoutMs = 5000): void
     {
-        $now = microtime(true);
-        $staleThreshold = 60.0; // 60 seconds
+        if ($this->producer === null) {
+            return;
+        }
 
-        foreach (self::$deliveryResults as $messageId => $result) {
-            if ($now - $result['timestamp'] > $staleThreshold) {
-                unset(self::$deliveryResults[$messageId]);
-                // Assume stale messages were delivered (or failed silently)
-                self::$pendingMessages = max(0, self::$pendingMessages - 1);
+        // Poll first to process any pending callbacks
+        $this->producer->poll(0);
+
+        // Flush with timeout
+        $result = $this->producer->flush($timeoutMs);
+
+        // Retry logic for reliability - adaptive based on context
+        if ($result !== RD_KAFKA_RESP_ERR_NO_ERROR && $this->producer->getOutQLen() > 0) {
+            // CLI: full retries for reliability
+            // HTTP: limited retries to balance speed and reliability
+            $maxRetries = PHP_SAPI === 'cli' ? 10 : 3;
+            $retryTimeout = PHP_SAPI === 'cli' ? 500 : 100;
+
+            $retries = $maxRetries;
+            while ($retries-- > 0 && $this->producer->getOutQLen() > 0) {
+                $this->producer->poll(50);
+                $this->producer->flush($retryTimeout);
             }
         }
+    }
+
+    public function subscribe(array $topics): void
+    {
+        if (!$this->connected || $this->consumer === null) {
+            throw BrokerException::notConnected('kafka');
+        }
+
+        try {
+            $this->consumer->subscribe($topics);
+            usleep(500000); // Allow metadata refresh
+            $this->consumer->consume(100); // Trigger metadata refresh
+        } catch (\Throwable $e) {
+            throw BrokerException::subscribeFailed('kafka', implode(',', $topics), $e->getMessage(), $e);
+        }
+    }
+
+    public function consume(callable $callback, int $timeoutMs = 1000, int $batchSize = 100): void
+    {
+        if (!$this->connected || $this->consumer === null) {
+            throw BrokerException::notConnected('kafka');
+        }
+
+        $this->consuming = true;
+        $this->consecutiveErrors = 0;
+
+        while ($this->consuming) {
+            try {
+                $message = $this->consumer->consume($timeoutMs);
+
+                if ($message === null) {
+                    continue;
+                }
+
+                $kafkaMessage = KafkaMessage::fromRdKafka($message);
+
+                // Handle errors
+                if ($kafkaMessage->hasError()) {
+                    $this->handleKafkaError($kafkaMessage);
+                    continue;
+                }
+
+                // Reset error counter on successful message
+                $this->consecutiveErrors = 0;
+
+                // Process message
+                $shouldContinue = $callback($kafkaMessage);
+                if ($shouldContinue === false) {
+                    break;
+                }
+
+            } catch (BrokerException $e) {
+                throw $e;
+            } catch (\Throwable $e) {
+                $this->consecutiveErrors++;
+                BrokerMetrics::recordError('kafka', 'consume');
+
+                if ($this->consecutiveErrors >= 5) {
+                    throw BrokerException::consumeFailed('kafka', $e->getMessage(), $e);
+                }
+
+                // Brief pause before retry
+                usleep(100000); // 100ms
+            }
+        }
+    }
+
+    public function stopConsuming(): void
+    {
+        $this->consuming = false;
+    }
+
+    public function commit(KafkaMessage $message): void
+    {
+        if (!$this->manualCommit || $this->consumer === null || $message->raw === null) {
+            return;
+        }
+
+        try {
+            $this->consumer->commit($message->raw);
+        } catch (\Throwable) {
+            // Silently ignore commit errors (precision warnings, etc.)
+        }
+    }
+
+    /**
+     * Get topic instance with TTL-based caching.
+     *
+     * @param string $topic Topic name
+     * @return RdKafka\ProducerTopic
+     */
+    private function getTopicInstance(string $topic): RdKafka\ProducerTopic
+    {
+        $now = time();
+
+        // Cleanup expired topics
+        foreach ($this->topicCache as $topicName => $cached) {
+            if ($now - $cached['created_at'] > self::TOPIC_CACHE_TTL) {
+                unset($this->topicCache[$topicName]);
+            }
+        }
+
+        if (!isset($this->topicCache[$topic])) {
+            $this->topicCache[$topic] = [
+                'topic' => $this->producer->newTopic($topic),
+                'created_at' => $now,
+            ];
+        }
+
+        return $this->topicCache[$topic]['topic'];
+    }
+
+    /**
+     * Handle Kafka error messages with circuit breaker logic.
+     *
+     * @param KafkaMessage $message
+     * @return void
+     */
+    private function handleKafkaError(KafkaMessage $message): void
+    {
+        if ($message->isEof() || $message->isTimeout()) {
+            $this->consecutiveErrors = 0;
+            return;
+        }
+
+        if ($message->isUnknownTopicOrPartition()) {
+            $this->handleUnknownTopicError();
+            return;
+        }
+
+        // Other errors
+        $this->consecutiveErrors++;
+        $now = time();
+
+        // Reset error counter if last error was long ago
+        if ($now - $this->lastErrorTime > 60) {
+            $this->consecutiveErrors = 0;
+        }
+
+        $this->lastErrorTime = $now;
+
+        BrokerMetrics::recordError('kafka', 'message');
+
+        if ($this->consecutiveErrors >= 10) {
+            sleep(60);
+            $this->consecutiveErrors = 0;
+            return;
+        }
+
+        // Exponential backoff
+        $delay = min((int) pow(2, $this->consecutiveErrors - 1), 30);
+        if ($delay > 0) {
+            sleep($delay);
+        }
+    }
+
+    /**
+     * Handle unknown topic/partition error with exponential backoff.
+     *
+     * @return void
+     */
+    private function handleUnknownTopicError(): void
+    {
+        $this->consecutiveErrors++;
+        $maxRetries = 10;
+
+        if ($this->consecutiveErrors >= $maxRetries) {
+            throw BrokerTemporaryException::unknownTopicOrPartition('unknown', $this->consecutiveErrors);
+        }
+
+        // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms... capped at 10s
+        $delayMs = min(100 * (2 ** ($this->consecutiveErrors - 1)), 10000);
+        usleep($delayMs * 1000);
+    }
+
+    /**
+     * Get number of pending messages waiting for delivery confirmation.
+     *
+     * @return int
+     */
+    public function getPendingCount(): int
+    {
+        return $this->pendingMessages;
     }
 
     /**
@@ -790,44 +671,173 @@ final class RdKafkaClient implements KafkaClientInterface
     }
 
     /**
-     * Get delivery results for monitoring.
+     * Cleanup stale delivery results (older than 60 seconds).
      *
-     * @return array<string, array{status: string, error: string|null, timestamp: float}>
+     * Call this periodically to prevent memory leaks.
      */
-    public static function getDeliveryResults(): array
+    public function cleanupStaleDeliveryResults(): void
     {
-        return self::$deliveryResults;
+        $now = microtime(true);
+        $staleThreshold = 60.0; // 60 seconds
+
+        foreach ($this->deliveryResults as $messageId => $result) {
+            if ($now - $result['timestamp'] > $staleThreshold) {
+                unset($this->deliveryResults[$messageId]);
+                // Assume stale messages were delivered (or failed silently)
+                $this->pendingMessages = max(0, $this->pendingMessages - 1);
+            }
+        }
     }
 
-    private function handleUnknownTopicError(): void
+    /**
+     * Poll for delivery reports without blocking.
+     *
+     * Call this periodically in long-running processes to ensure
+     * delivery callbacks are processed.
+     *
+     * @param int $timeoutMs Poll timeout in milliseconds (0 = non-blocking)
+     * @return int Number of events processed
+     */
+    public function poll(int $timeoutMs = 0): int
     {
-        $this->consecutiveErrors++;
-
-        if ($this->consecutiveErrors >= 10) {
-            throw BrokerTemporaryException::unknownTopicOrPartition('unknown', $this->consecutiveErrors);
+        if ($this->producer === null) {
+            return 0;
         }
 
-        $delayMs = min(100 * (2 ** ($this->consecutiveErrors - 1)), 5000);
-        usleep($delayMs * 1000);
+        return $this->producer->poll($timeoutMs) ?? 0;
     }
 
     public function __destruct()
     {
-        // Don't disconnect singleton producer on instance destruction
-        if (!$this->useSingleton) {
-            $this->disconnect();
-        } else {
-            // Just cleanup instance-specific resources
-            if ($this->consumer !== null) {
-                try {
-                    $this->consumer->unsubscribe();
-                } catch (\Throwable) {
-                    // Ignore
+        $this->disconnect();
+    }
+
+    /**
+     * Ensure a topic exists with the specified number of partitions.
+     *
+     * Uses metadata API to check topic existence and partition count.
+     * If topic doesn't exist or has fewer partitions, logs a warning.
+     *
+     * Note: Creating/altering topics requires Kafka Admin API which may not be
+     * available in all rdkafka versions. Configure Kafka server's num.partitions
+     * or use kafka-topics CLI for production deployments.
+     *
+     * @param string $topic Topic name
+     * @param int $partitions Number of partitions
+     * @param int $replicationFactor Replication factor
+     * @return bool True if topic exists with sufficient partitions, false otherwise
+     */
+    public function ensureTopicExists(string $topic, int $partitions = 1, int $replicationFactor = 1): bool
+    {
+        if (!$this->connected || $this->producer === null) {
+            throw BrokerException::notConnected('kafka');
+        }
+
+        $brokerList = implode(',', $this->brokers);
+
+        try {
+            // Get metadata to check if topic exists
+            $metadata = $this->producer->getMetadata(false, null, 5000);
+            $existingTopics = $metadata->getTopics();
+
+            $topicExists = false;
+            $currentPartitions = 0;
+
+            foreach ($existingTopics as $existingTopic) {
+                if ($existingTopic->getTopic() === $topic) {
+                    $topicExists = true;
+                    $currentPartitions = count($existingTopic->getPartitions());
+                    break;
                 }
-                $this->consumer = null;
             }
-            $this->topicCache = [];
-            $this->connected = false;
+
+            if (!$topicExists) {
+                // Topic doesn't exist - try to create using Admin API if available
+                if (class_exists('RdKafka\Admin\NewTopic') && class_exists('RdKafka\Admin\Client')) {
+                    return $this->createTopicViaAdminApi($topic, $partitions, $replicationFactor, $brokerList);
+                }
+
+                // Admin API not available - topic will be auto-created by Kafka with server defaults
+                return false;
+            }
+
+            // Topic exists - check partition count
+            if ($currentPartitions < $partitions) {
+                if (class_exists('RdKafka\Admin\NewPartitions') && class_exists('RdKafka\Admin\Client')) {
+                    return $this->addPartitionsViaAdminApi($topic, $partitions, $brokerList);
+                }
+
+                // Can't add partitions via Admin API
+                return false;
+            }
+
+            // Topic exists with sufficient partitions
+            return true;
+
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Create topic via Admin API (if available).
+     *
+     * @phpstan-ignore-next-line Admin API classes may not exist in all rdkafka versions
+     */
+    private function createTopicViaAdminApi(string $topic, int $partitions, int $replicationFactor, string $brokerList): bool
+    {
+        try {
+            /** @phpstan-ignore-next-line */
+            $newTopic = new \RdKafka\Admin\NewTopic($topic, $partitions, $replicationFactor);
+
+            $adminConf = new RdKafka\Conf();
+            $adminConf->set('bootstrap.servers', $brokerList);
+            /** @phpstan-ignore-next-line */
+            $admin = \RdKafka\Admin\Client::fromConf($adminConf);
+
+            $result = $admin->createTopics([$newTopic], 10000);
+
+            foreach ($result as $topicResult) {
+                if ($topicResult->error() !== RD_KAFKA_RESP_ERR_NO_ERROR
+                    && $topicResult->error() !== RD_KAFKA_RESP_ERR_TOPIC_ALREADY_EXISTS) {
+                    return false;
+                }
+            }
+
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Add partitions via Admin API (if available).
+     *
+     * @phpstan-ignore-next-line Admin API classes may not exist in all rdkafka versions
+     */
+    private function addPartitionsViaAdminApi(string $topic, int $partitions, string $brokerList): bool
+    {
+        try {
+            /** @phpstan-ignore-next-line */
+            $newPartitions = new \RdKafka\Admin\NewPartitions($topic, $partitions);
+
+            $adminConf = new RdKafka\Conf();
+            $adminConf->set('bootstrap.servers', $brokerList);
+            /** @phpstan-ignore-next-line */
+            $admin = \RdKafka\Admin\Client::fromConf($adminConf);
+
+            $result = $admin->createPartitions([$newPartitions], 10000);
+
+            foreach ($result as $topicResult) {
+                if ($topicResult->error() !== RD_KAFKA_RESP_ERR_NO_ERROR) {
+                    return false;
+                }
+            }
+
+            return true;
+        } catch (\Throwable) {
+            return false;
         }
     }
 }
+

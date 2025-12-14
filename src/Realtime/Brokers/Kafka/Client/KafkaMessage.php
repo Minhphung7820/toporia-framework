@@ -129,26 +129,4 @@ final class KafkaMessage
         );
     }
 
-    /**
-     * Create from kafka-php message array.
-     *
-     * @param string $topic Topic name
-     * @param int $partition Partition number
-     * @param array<string, mixed> $message Message data
-     * @return static
-     */
-    public static function fromKafkaPhp(string $topic, int $partition, array $message): static
-    {
-        return new static(
-            topic: $topic,
-            payload: (string) ($message['value'] ?? ''),
-            partition: $partition,
-            offset: (int) ($message['offset'] ?? 0),
-            key: isset($message['key']) ? (string) $message['key'] : null,
-            timestamp: (int) ($message['timestamp'] ?? 0),
-            errorCode: 0,
-            errorMessage: '',
-            raw: $message
-        );
-    }
 }
