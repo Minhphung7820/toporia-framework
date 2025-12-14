@@ -49,9 +49,10 @@ final class Chronos extends DateTimeImmutable implements ChronosInterface
 
     /**
      * Common date formats.
+     * Note: Using CHRONOS_ prefix to avoid conflict with DateTimeInterface constants in PHP 8.4+
      */
-    public const ISO8601 = 'Y-m-d\TH:i:sP';
-    public const RFC2822 = 'D, d M Y H:i:s O';
+    public const CHRONOS_ISO8601 = 'Y-m-d\TH:i:sP';
+    public const CHRONOS_RFC2822 = 'D, d M Y H:i:s O';
     public const DATE_FORMAT = 'Y-m-d';
     public const TIME_FORMAT = 'H:i:s';
     public const DATETIME_FORMAT = 'Y-m-d H:i:s';
@@ -118,13 +119,13 @@ final class Chronos extends DateTimeImmutable implements ChronosInterface
     /**
      * Create from timestamp.
      *
-     * @param int $timestamp
+     * @param int|float $timestamp
      * @param DateTimeZone|string|null $timezone
      * @return static
      */
-    public static function createFromTimestamp(int $timestamp, DateTimeZone|string|null $timezone = null): static
+    public static function createFromTimestamp(int|float $timestamp, DateTimeZone|string|null $timezone = null): static
     {
-        return static::parse('@' . $timestamp)->setTimezone(self::parseTimezone($timezone) ?? new DateTimeZone(date_default_timezone_get()));
+        return static::parse('@' . (int) $timestamp)->setTimezone(self::parseTimezone($timezone) ?? new DateTimeZone(date_default_timezone_get()));
     }
 
     /**
@@ -758,7 +759,7 @@ final class Chronos extends DateTimeImmutable implements ChronosInterface
      */
     public function toIso8601String(): string
     {
-        return $this->format(self::ISO8601);
+        return $this->format(self::CHRONOS_ISO8601);
     }
 
     /**
@@ -798,7 +799,7 @@ final class Chronos extends DateTimeImmutable implements ChronosInterface
      */
     public function toRfc2822String(): string
     {
-        return $this->format(self::RFC2822);
+        return $this->format(self::CHRONOS_RFC2822);
     }
 
     /**
