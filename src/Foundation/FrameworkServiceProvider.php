@@ -66,11 +66,6 @@ final class FrameworkServiceProvider extends ServiceProvider
             \Toporia\Framework\Providers\ViteServiceProvider::class,
             \Toporia\Framework\Webhook\Providers\WebhookServiceProvider::class,
             \Toporia\Framework\Socialite\Providers\SocialiteServiceProvider::class,
-
-            // Enterprise features
-            \Toporia\Framework\Providers\MultiTenancyServiceProvider::class,
-            \Toporia\Framework\Providers\ApiVersioningServiceProvider::class,
-            \Toporia\Framework\Providers\AuditServiceProvider::class,
         ];
     }
 
