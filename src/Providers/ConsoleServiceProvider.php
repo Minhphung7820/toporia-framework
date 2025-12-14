@@ -203,6 +203,7 @@ final class ConsoleServiceProvider extends ServiceProvider
       'inspire' => \Toporia\Framework\Console\Commands\App\InspireCommand::class,
       'tinker' => \Toporia\Framework\Console\Commands\App\TinkerCommand::class,
       'stub:publish' => \Toporia\Framework\Console\Commands\App\StubPublishCommand::class,
+      'vendor:publish' => \Toporia\Framework\Console\Commands\App\VendorPublishCommand::class,
 
       // Development server
       'serve' => \Toporia\Framework\Console\Commands\ServeCommand::class,

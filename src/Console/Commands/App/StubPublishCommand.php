@@ -82,7 +82,4 @@ final class StubPublishCommand extends Command
 
         return 0;
     }
-
-        return getcwd() ?: dirname(__DIR__, 5);
-    }
 }
