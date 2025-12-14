@@ -35,12 +35,42 @@ Toporia is a PHP framework designed for developers who appreciate clean, maintai
 
 ### Additional Features
 
-- OAuth/Social Authentication
 - Email with queue support
 - Excel import/export (streaming, chunking)
-- Webhook handling
 - Task scheduling
 - And more...
+
+## Optional Packages
+
+Toporia ecosystem includes optional packages for extended functionality:
+
+| Package | Description | Install |
+|---------|-------------|---------|
+| [toporia/socialite](https://github.com/Minhphung7820/toporia-socialite) | OAuth social authentication (Google, Facebook, GitHub) | `composer require toporia/socialite` |
+| [toporia/webhook](https://github.com/Minhphung7820/toporia-webhook) | Webhook dispatching and receiving | `composer require toporia/webhook` |
+| [toporia/tenancy](https://github.com/Minhphung7820/toporia-tenancy) | Multi-tenancy support | `composer require toporia/tenancy` |
+| [toporia/audit](https://github.com/Minhphung7820/toporia-audit) | Audit logging for models | `composer require toporia/audit` |
+| [toporia/api-versioning](https://github.com/Minhphung7820/toporia-api-versioning) | API versioning support | `composer require toporia/api-versioning` |
+
+After installing a package, register its service provider in your `AppServiceProvider`:
+
+```php
+use Toporia\Socialite\SocialiteServiceProvider;
+use Toporia\Webhook\WebhookServiceProvider;
+
+public function register(ContainerInterface $container): void
+{
+    $container->register(SocialiteServiceProvider::class);
+    $container->register(WebhookServiceProvider::class);
+}
+```
+
+Publish package configs:
+
+```bash
+php console vendor:publish --tag=socialite-config
+php console vendor:publish --tag=webhook-config
+```
 
 ## Installation
 
