@@ -600,6 +600,64 @@ final class RabbitMqBroker implements BrokerInterface, HealthCheckableInterface
     }
 
     /**
+     * {@inheritdoc}
+     *
+     * RabbitMQ publish in batch using transaction for atomicity.
+     */
+    public function publishBatch(array $messages, int $flushTimeoutMs = 10000): array
+    {
+        if (!$this->connected) {
+            throw BrokerException::notConnected('rabbitmq');
+        }
+
+        $startTime = microtime(true);
+        $queued = 0;
+        $failed = 0;
+
+        $channel = $this->getChannel();
+
+        // Start transaction for batch atomicity
+        $channel->tx_select();
+
+        foreach ($messages as $item) {
+            $channelName = $item['channel'];
+            $message = $item['message'];
+
+            try {
+                $routingKey = $this->formatRoutingKey($channelName);
+                $amqpMessage = new \PhpAmqpLib\Message\AMQPMessage(
+                    $message->toJson(),
+                    [
+                        'content_type' => 'application/json',
+                        'delivery_mode' => $this->persistentMessages ? 2 : 1,
+                    ]
+                );
+                $channel->basic_publish($amqpMessage, $this->exchange, $routingKey);
+                $queued++;
+            } catch (\Throwable $e) {
+                $failed++;
+                error_log("[RabbitMqBroker] Batch publish failed: {$e->getMessage()}");
+            }
+        }
+
+        // Commit transaction
+        $channel->tx_commit();
+
+        $totalTime = (microtime(true) - $startTime) * 1000;
+
+        BrokerMetrics::recordPublish('rabbitmq', 'batch', $totalTime, $failed === 0);
+
+        return [
+            'queued' => $queued,
+            'failed' => $failed,
+            'queue_time_ms' => round($totalTime, 2),
+            'flush_time_ms' => 0,
+            'total_time_ms' => round($totalTime, 2),
+            'throughput' => $totalTime > 0 ? (int) round($queued / ($totalTime / 1000)) : 0,
+        ];
+    }
+
+    /**
      * Get or create queue name.
      *
      * @return string

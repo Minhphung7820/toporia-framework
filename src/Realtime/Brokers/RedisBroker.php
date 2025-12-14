@@ -435,6 +435,55 @@ final class RedisBroker implements BrokerInterface, HealthCheckableInterface
 
     /**
      * {@inheritdoc}
+     *
+     * Redis Pub/Sub does not support true batching like Kafka.
+     * This method publishes messages sequentially using Redis pipeline for optimization.
+     */
+    public function publishBatch(array $messages, int $flushTimeoutMs = 10000): array
+    {
+        if (!$this->connected || $this->redis === null) {
+            throw BrokerException::notConnected('redis');
+        }
+
+        $startTime = microtime(true);
+        $queued = 0;
+        $failed = 0;
+
+        // Use Redis pipeline for batch optimization
+        $this->redis->multi(\Redis::PIPELINE);
+
+        foreach ($messages as $item) {
+            $channel = $item['channel'];
+            $message = $item['message'];
+
+            try {
+                $this->redis->publish($channel, $message->toJson());
+                $queued++;
+            } catch (\Throwable $e) {
+                $failed++;
+                error_log("[RedisBroker] Batch publish failed: {$e->getMessage()}");
+            }
+        }
+
+        // Execute pipeline
+        $this->redis->exec();
+
+        $totalTime = (microtime(true) - $startTime) * 1000;
+
+        BrokerMetrics::recordPublish('redis', 'batch', $totalTime, $failed === 0);
+
+        return [
+            'queued' => $queued,
+            'failed' => $failed,
+            'queue_time_ms' => round($totalTime, 2),
+            'flush_time_ms' => 0,
+            'total_time_ms' => round($totalTime, 2),
+            'throughput' => $totalTime > 0 ? (int) round($queued / ($totalTime / 1000)) : 0,
+        ];
+    }
+
+    /**
+     * {@inheritdoc}
      */
     public function healthCheck(): HealthCheckResult
     {

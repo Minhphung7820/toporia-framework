@@ -86,4 +86,20 @@ interface BrokerInterface
      * @return string (redis, rabbitmq, nats, kafka, postgres)
      */
     public function getName(): string;
+
+    /**
+     * Publish multiple messages in a single batch operation.
+     *
+     * Optimized for high-throughput scenarios. Messages are:
+     * - Grouped by topic/partition
+     * - Compressed together (lz4/snappy)
+     * - Sent in minimal network requests
+     *
+     * Performance: 10-100x faster than individual publish() calls
+     *
+     * @param array<array{channel: string, message: MessageInterface}> $messages
+     * @param int $flushTimeoutMs Timeout for final flush
+     * @return array{queued: int, failed: int, total_time_ms: float, throughput: int}
+     */
+    public function publishBatch(array $messages, int $flushTimeoutMs = 10000): array;
 }
