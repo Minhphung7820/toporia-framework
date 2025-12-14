@@ -66,8 +66,8 @@ final class MigrateFreshCommand extends Command
             $this->newLine();
             $this->info("  Running migrations...");
             $migrator = new Migrator($connection);
-            // Get migrations path (5 levels up from this file: src/Framework/Console/Commands/Database -> root)
-            $migrationsPath = dirname(__DIR__, 5) . '/database/migrations';
+            // Get migrations path
+            $migrationsPath = $this->getBasePath() . '/database/migrations';
 
             if (!is_dir($migrationsPath)) {
                 $this->error("  ✗ Migrations directory not found: {$migrationsPath}");

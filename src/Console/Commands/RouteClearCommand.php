@@ -45,7 +45,7 @@ final class RouteClearCommand extends Command
         $this->printHeader();
 
         // Get cache path
-        $cachePath = dirname(__DIR__, 4) . '/storage/framework/cache';
+        $cachePath = $this->getBasePath() . '/storage/framework/cache';
         $cache = new RouteCache($cachePath);
 
         // Check if cached

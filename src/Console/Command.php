@@ -348,4 +348,28 @@ abstract class Command
 
         return in_array($answer, $choices) ? $answer : ($default ?? $choices[0]);
     }
+
+    /**
+     * Get the application base path.
+     *
+     * @return string
+     */
+    protected function getBasePath(): string
+    {
+        // Use APP_BASE_PATH if defined (set by public/index.php or console)
+        if (defined('APP_BASE_PATH')) {
+            return constant('APP_BASE_PATH');
+        }
+
+        // Try to get from container
+        if (function_exists('app')) {
+            $app = app();
+            if (method_exists($app, 'basePath')) {
+                return $app->basePath();
+            }
+        }
+
+        // Fallback to current working directory
+        return getcwd() ?: dirname(__DIR__, 5);
+    }
 }

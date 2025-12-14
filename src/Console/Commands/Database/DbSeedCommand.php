@@ -61,8 +61,8 @@ final class DbSeedCommand extends Command
             if (!class_exists($class)) {
                 // Extract class name from full namespace
                 $className = basename(str_replace('\\', '/', $class));
-                // Get project root (5 levels up from this file)
-                $projectRoot = dirname(__DIR__, 5);
+                // Get project root
+                $projectRoot = $this->getBasePath();
                 $seederFile = $projectRoot . '/database/seeders/' . $className . '.php';
 
                 if (file_exists($seederFile)) {

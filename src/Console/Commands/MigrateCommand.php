@@ -56,7 +56,7 @@ final class MigrateCommand extends Command
             $migrator = new Migrator($connection);
 
             // Get migrations path
-            $migrationsPath = dirname(__DIR__, 4) . '/database/migrations';
+            $migrationsPath = $this->getBasePath() . '/database/migrations';
 
             if (!is_dir($migrationsPath)) {
                 $this->printError('Migrations directory not found!');
