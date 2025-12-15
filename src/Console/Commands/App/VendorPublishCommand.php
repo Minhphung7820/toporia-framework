@@ -33,6 +33,11 @@ final class VendorPublishCommand extends Command
      * @var array<string, array{source: string, destination: string}>
      */
     private array $publishables = [
+        // Dominion (RBAC) package
+        'dominion-config' => [
+            'source' => 'vendor/toporia/dominion/config/dominion.php',
+            'destination' => 'config/dominion.php',
+        ],
         // MongoDB package
         'mongodb-config' => [
             'source' => 'vendor/toporia/mongodb/config/mongodb.php',

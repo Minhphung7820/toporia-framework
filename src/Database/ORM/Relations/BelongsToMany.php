@@ -1834,21 +1834,22 @@ class BelongsToMany extends Relation
     }
 
     /**
-     * Detach a related model from the parent via pivot table.
+     * Detach related models from the parent via pivot table.
      *
      * FIXED: Applies relation constraints (wherePivot/where) like other frameworks.
      *
-     * @param int|string|null $id Related model ID (null = detach all)
+     * @param int|string|array|null $ids Related model ID(s) (null = detach all)
      * @return int Number of rows deleted
      */
-    public function detach(int|string|null $id = null): int
+    public function detach(int|string|array|null $ids = null): int
     {
         $qb = new QueryBuilder($this->query->getConnection());
         $query = $qb->table($this->pivotTable)
             ->where($this->foreignPivotKey, $this->parent->getAttribute($this->parentKey));
 
-        if ($id !== null) {
-            $query->where($this->relatedPivotKey, $id);
+        if ($ids !== null) {
+            $ids = is_array($ids) ? $ids : [$ids];
+            $query->whereIn($this->relatedPivotKey, $ids);
         }
 
         // FIXED: Apply stored pivot constraints (wherePivot, wherePivotIn, etc.)

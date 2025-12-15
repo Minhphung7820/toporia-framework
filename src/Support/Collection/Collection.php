@@ -529,6 +529,21 @@ class Collection implements CollectionInterface, \JsonSerializable
     }
 
     /**
+     * Push one or more items onto the end of the collection.
+     *
+     * @param mixed ...$values
+     * @return $this
+     */
+    public function push(mixed ...$values): static
+    {
+        foreach ($values as $value) {
+            $this->items[] = $value;
+        }
+
+        return $this;
+    }
+
+    /**
      * Combine with values.
      */
     public function combine(mixed $values): static
