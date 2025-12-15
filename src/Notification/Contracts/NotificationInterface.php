@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Toporia\Framework\Notification\Contracts;
 
-
 /**
  * Interface NotificationInterface
  *
@@ -15,7 +14,7 @@ namespace Toporia\Framework\Notification\Contracts;
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
- * @version     1.0.0
+ * @version     1.1.0
  * @package     toporia/framework
  * @subpackage  Notification\Contracts
  * @since       2025-01-10
@@ -27,7 +26,7 @@ interface NotificationInterface
     /**
      * Get notification channels for a notifiable entity.
      *
-     * Returns array of channel names: ['mail', 'database', 'sms', 'slack']
+     * Returns array of channel names: ['mail', 'database', 'sms', 'slack', 'broadcast']
      * Channels are resolved and executed in order.
      *
      * Performance: O(1) - Simple array return
@@ -46,11 +45,12 @@ interface NotificationInterface
      * - DatabaseChannel: array of data
      * - SmsChannel: SmsMessage object
      * - SlackChannel: SlackMessage object
+     * - BroadcastChannel: BroadcastMessage object
      *
      * Performance: O(1) - Data construction only when needed
      *
      * @param NotifiableInterface $notifiable The entity receiving notification
-     * @param string $channel Channel name (mail, database, sms, slack)
+     * @param string $channel Channel name (mail, database, sms, slack, broadcast)
      * @return mixed Channel-specific message object or data
      */
     public function toChannel(NotifiableInterface $notifiable, string $channel): mixed;
@@ -59,10 +59,27 @@ interface NotificationInterface
      * Get unique notification identifier.
      *
      * Used for tracking, deduplication, and database storage.
+     * Should be UUID v4 format for distributed systems.
      *
-     * @return string Unique ID
+     * @return string Unique ID (UUID format recommended)
      */
     public function getId(): string;
+
+    /**
+     * Determine if notification should be sent to the notifiable.
+     *
+     * Use this for conditional sending based on:
+     * - User preferences
+     * - Business rules
+     * - Rate limiting
+     * - Feature flags
+     *
+     * Return false to skip sending without error.
+     *
+     * @param NotifiableInterface $notifiable The entity receiving notification
+     * @return bool True to send, false to skip
+     */
+    public function shouldSend(NotifiableInterface $notifiable): bool;
 
     /**
      * Determine if notification should be queued.

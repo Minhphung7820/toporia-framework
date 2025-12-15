@@ -158,6 +158,16 @@ final class RuleManager
 
         // Password Rule
         'password' => Rules\Password::class,
+
+        // Additional Format Rules
+        'time' => Rules\Time::class,
+        'date_time' => Rules\DateTime::class,
+        'datetime' => Rules\DateTime::class, // Alias
+        'credit_card' => Rules\CreditCard::class,
+        'base64' => Rules\Base64::class,
+        'phone' => Rules\Phone::class,
+        'postal_code' => Rules\PostalCode::class,
+        'color' => Rules\Color::class,
     ];
 
     /**

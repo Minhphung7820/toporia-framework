@@ -12,10 +12,23 @@ use Toporia\Framework\Container\Contracts\ContainerInterface;
  *
  * Multi-channel notification dispatcher with driver management.
  *
+ * Features:
+ * - Multi-channel dispatch (mail, database, sms, slack, broadcast)
+ * - Queue integration for async delivery
+ * - Bulk notification optimization
+ * - Custom channel registration
+ * - Conditional sending via shouldSend()
+ * - Event dispatch for monitoring
+ *
+ * Performance:
+ * - O(C) for single notification where C = channels
+ * - O(1) job dispatch for bulk queued notifications
+ * - Lazy channel loading with caching
+ *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
- * @version     1.0.0
+ * @version     1.1.0
  * @package     toporia/framework
  * @subpackage  Notification
  * @since       2025-01-10
@@ -25,9 +38,14 @@ use Toporia\Framework\Container\Contracts\ContainerInterface;
 final class NotificationManager implements NotificationManagerInterface
 {
     /**
-     * @var array<string, ChannelInterface> Resolved channel instances
+     * @var array<string, ChannelInterface> Resolved channel instances (cached)
      */
     private array $channels = [];
+
+    /**
+     * @var array<string, callable> Custom channel factories
+     */
+    private array $customChannels = [];
 
     private string $defaultChannel;
 
@@ -47,6 +65,11 @@ final class NotificationManager implements NotificationManagerInterface
      */
     public function send(NotifiableInterface $notifiable, NotificationInterface $notification): void
     {
+        // Check if notification should be sent (conditional sending)
+        if (!$notification->shouldSend($notifiable)) {
+            return; // Skip silently
+        }
+
         // Check if notification should be queued
         if ($notification->shouldQueue()) {
             $this->sendQueued($notifiable, $notification);
@@ -62,22 +85,35 @@ final class NotificationManager implements NotificationManagerInterface
      */
     public function sendNow(NotifiableInterface $notifiable, NotificationInterface $notification): void
     {
-        // Get channels for this notification
-        $channels = $notification->via($notifiable);
+        // Check if notification should be sent (conditional sending)
+        if (!$notification->shouldSend($notifiable)) {
+            return;
+        }
 
-        if (empty($channels)) {
+        // Get channels for this notification
+        $channelNames = $notification->via($notifiable);
+
+        if (empty($channelNames)) {
             return; // No channels specified
         }
 
+        $sentChannels = [];
+
         // Send to each channel
-        foreach ($channels as $channelName) {
+        foreach ($channelNames as $channelName) {
             try {
                 $channel = $this->channel($channelName);
                 $channel->send($notifiable, $notification);
+                $sentChannels[] = $channelName;
             } catch (\Throwable $e) {
                 // Log error and continue to next channel
                 $this->handleChannelError($channelName, $notifiable, $notification, $e);
             }
+        }
+
+        // Dispatch NotificationSent event if any channel succeeded
+        if (!empty($sentChannels)) {
+            $this->dispatchSentEvent($notifiable, $notification, $sentChannels);
         }
     }
 
@@ -96,6 +132,12 @@ final class NotificationManager implements NotificationManagerInterface
         // Set queue name from notification
         $job->onQueue($notification->getQueueName());
 
+        // Set delay if specified
+        $delay = $notification->getDelay();
+        if ($delay > 0) {
+            $job->delay($delay);
+        }
+
         // Dispatch to queue
         dispatch($job);
     }
@@ -106,6 +148,7 @@ final class NotificationManager implements NotificationManagerInterface
      * Performance Optimization:
      * - If queued: Dispatches single bulk job instead of N separate jobs
      * - If sync: Sends immediately to each notifiable
+     * - Filters notifiables through shouldSend() for sync sends
      *
      * Before: O(N) job dispatches
      * After:  O(1) job dispatch for queued, O(N) for sync
@@ -113,22 +156,29 @@ final class NotificationManager implements NotificationManagerInterface
     public function sendToMany(iterable $notifiables, NotificationInterface $notification): void
     {
         // Convert to array for count and bulk processing
-        $notifiables = is_array($notifiables) ? $notifiables : iterator_to_array($notifiables);
+        $notifiableList = is_array($notifiables) ? $notifiables : iterator_to_array($notifiables);
 
-        if (empty($notifiables)) {
+        if (empty($notifiableList)) {
             return; // Nothing to send
         }
 
         // If queued, dispatch single bulk job (OPTIMIZED)
+        // shouldSend() check happens in the job for each notifiable
         if ($notification->shouldQueue()) {
-            $job = Jobs\SendBulkNotificationJob::make($notifiables, $notification);
+            $job = Jobs\SendBulkNotificationJob::make($notifiableList, $notification);
             $job->onQueue($notification->getQueueName());
+
+            $delay = $notification->getDelay();
+            if ($delay > 0) {
+                $job->delay($delay);
+            }
+
             dispatch($job);
             return;
         }
 
-        // Sync: send to each immediately
-        foreach ($notifiables as $notifiable) {
+        // Sync: send to each immediately (with shouldSend check)
+        foreach ($notifiableList as $notifiable) {
             $this->sendNow($notifiable, $notification);
         }
     }
@@ -158,11 +208,65 @@ final class NotificationManager implements NotificationManagerInterface
     }
 
     /**
+     * Register a custom notification channel.
+     *
+     * Allows extending the notification system with custom channels:
+     * ```php
+     * $manager->extend('telegram', function ($config, $container) {
+     *     return new TelegramChannel($config['bot_token']);
+     * });
+     * ```
+     *
+     * @param string $name Channel name
+     * @param callable $factory Factory function: fn(array $config, ?ContainerInterface $container): ChannelInterface
+     * @return $this
+     */
+    public function extend(string $name, callable $factory): self
+    {
+        $this->customChannels[$name] = $factory;
+
+        // Clear cached instance if exists
+        unset($this->channels[$name]);
+
+        return $this;
+    }
+
+    /**
+     * Check if a channel is registered (built-in or custom).
+     *
+     * @param string $name
+     * @return bool
+     */
+    public function hasChannel(string $name): bool
+    {
+        // Check custom channels first
+        if (isset($this->customChannels[$name])) {
+            return true;
+        }
+
+        // Check configured channels
+        return isset($this->config['channels'][$name]);
+    }
+
+    /**
+     * Get list of available channel names.
+     *
+     * @return array<string>
+     */
+    public function getAvailableChannels(): array
+    {
+        $configuredChannels = array_keys($this->config['channels'] ?? []);
+        $customChannels = array_keys($this->customChannels);
+
+        return array_unique(array_merge($configuredChannels, $customChannels));
+    }
+
+    /**
      * Create anonymous notifiable for specific channel route.
      *
      * Allows sending notifications to arbitrary channels without a model:
      * ```php
-     * Notification::route('mail', 'admin@example.com')
+     * app('notification')->route('mail', 'admin@example.com')
      *     ->notify(new OrderShipped());
      * ```
      *
@@ -179,6 +283,7 @@ final class NotificationManager implements NotificationManagerInterface
      * Create a notification channel instance.
      *
      * Uses configuration to instantiate the correct channel driver.
+     * Custom channels take precedence over built-in channels.
      *
      * Performance: O(1) - Direct class instantiation
      *
@@ -188,10 +293,23 @@ final class NotificationManager implements NotificationManagerInterface
      */
     private function createChannel(string $name): ChannelInterface
     {
+        // Check for custom channel first
+        if (isset($this->customChannels[$name])) {
+            $config = $this->config['channels'][$name] ?? [];
+            return ($this->customChannels[$name])($config, $this->container);
+        }
+
+        // Check configured channels
         $channels = $this->config['channels'] ?? [];
 
         if (!isset($channels[$name])) {
-            throw new \InvalidArgumentException("Notification channel '{$name}' is not configured");
+            throw new \InvalidArgumentException(
+                sprintf(
+                    "Notification channel '%s' is not configured. Available channels: %s",
+                    $name,
+                    implode(', ', $this->getAvailableChannels()) ?: 'none'
+                )
+            );
         }
 
         $channelConfig = $channels[$name];
@@ -203,14 +321,17 @@ final class NotificationManager implements NotificationManagerInterface
             'sms' => $this->createSmsChannel($channelConfig),
             'slack' => $this->createSlackChannel($channelConfig),
             'broadcast' => $this->createBroadcastChannel($channelConfig),
-            default => throw new \InvalidArgumentException("Unsupported notification driver: {$driver}")
+            default => throw new \InvalidArgumentException(
+                sprintf(
+                    "Unsupported notification driver: '%s'. Use extend() to register custom drivers.",
+                    $driver
+                )
+            )
         };
     }
 
     /**
      * Create Mail channel.
-     *
-     * Injects mail configuration for DIP compliance.
      *
      * @param array $config Channel-specific config
      * @return ChannelInterface
@@ -274,8 +395,6 @@ final class NotificationManager implements NotificationManagerInterface
     /**
      * Create Broadcast channel.
      *
-     * Integrates with Realtime system for WebSocket/SSE notifications.
-     *
      * @param array $config
      * @return ChannelInterface
      */
@@ -286,11 +405,37 @@ final class NotificationManager implements NotificationManagerInterface
         if (!$realtime) {
             throw new \RuntimeException(
                 'Broadcast channel requires RealtimeManager in container. ' .
-                    'Ensure RealtimeServiceProvider is registered in bootstrap/app.php'
+                'Ensure RealtimeServiceProvider is registered in bootstrap/app.php'
             );
         }
 
         return new Channels\BroadcastChannel($realtime, $config);
+    }
+
+    /**
+     * Dispatch NotificationSent event.
+     *
+     * @param NotifiableInterface $notifiable
+     * @param NotificationInterface $notification
+     * @param array<string> $channels
+     * @return void
+     */
+    private function dispatchSentEvent(
+        NotifiableInterface $notifiable,
+        NotificationInterface $notification,
+        array $channels
+    ): void {
+        if (!$this->container?->has('events')) {
+            return;
+        }
+
+        $event = new Events\NotificationSent(
+            notifiable: $notifiable,
+            notification: $notification,
+            channels: $channels
+        );
+
+        $this->container->get('events')->dispatch($event);
     }
 
     /**
