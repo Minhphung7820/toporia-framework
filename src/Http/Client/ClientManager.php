@@ -273,4 +273,50 @@ final class ClientManager implements ClientManagerInterface
     {
         return $this->client()->asMultipart();
     }
+
+    /**
+     * Execute multiple HTTP requests concurrently.
+     *
+     * Significantly improves performance when making multiple API calls by running them in parallel
+     * using cURL multi handle instead of sequential execution.
+     *
+     * Performance Example:
+     * - Sequential: 10 requests @ 200ms each = 2000ms total
+     * - Concurrent: 10 requests @ 200ms each = ~200ms total (10x faster!)
+     *
+     * Usage:
+     * ```php
+     * $responses = Http::pool(fn($pool) => [
+     *     $pool->get('https://api1.com/users')->as('users'),
+     *     $pool->get('https://api2.com/posts')->as('posts'),
+     *     $pool->post('https://api3.com/logs', ['event' => 'click'])->as('log'),
+     * ]);
+     *
+     * $users = $responses['users']->json();
+     * $posts = $responses['posts']->json();
+     * ```
+     *
+     * @param callable $callback Function that receives Pool instance and returns array of PendingRequest
+     * @param string|null $clientName Optional client name to use (default: default client)
+     * @return array<int|string, HttpResponseInterface> Array of responses indexed by request key or position
+     */
+    public function pool(callable $callback, ?string $clientName = null): array
+    {
+        $client = $this->client($clientName);
+
+        if (!$client instanceof RestClient) {
+            throw new HttpClientException('Pool only supports RestClient instances');
+        }
+
+        $pool = new Pool($client);
+        $requests = $callback($pool);
+
+        // If callback returns array of requests, execute them
+        if (is_array($requests)) {
+            return $pool->execute();
+        }
+
+        // Otherwise, execute the pool directly
+        return $pool->execute();
+    }
 }

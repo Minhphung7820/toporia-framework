@@ -83,9 +83,19 @@ final class HttpResponse implements HttpResponseInterface
     /**
      * {@inheritdoc}
      */
-    public function json(bool $assoc = true): mixed
+    public function json(bool $assoc = true, bool $throw = false): mixed
     {
-        return json_decode($this->body, $assoc);
+        $decoded = json_decode($this->body, $assoc);
+
+        // Check for JSON errors
+        if (json_last_error() !== JSON_ERROR_NONE && $throw) {
+            throw new HttpClientException(
+                'Failed to decode JSON response: ' . json_last_error_msg(),
+                json_last_error()
+            );
+        }
+
+        return $decoded;
     }
 
     /**
