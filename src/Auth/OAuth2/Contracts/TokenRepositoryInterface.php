@@ -92,4 +92,42 @@ interface TokenRepositoryInterface
      * @return int Number of tokens revoked
      */
     public function revokeClientTokens(string $clientId): int;
+
+    /**
+     * Create a new authorization code.
+     *
+     * @param string $clientId Client ID
+     * @param string $userId User ID
+     * @param string $redirectUri Redirect URI
+     * @param array<string> $scopes Requested scopes
+     * @param string|null $codeChallenge PKCE code challenge (optional)
+     * @param string|null $codeChallengeMethod PKCE method ('plain' or 'S256')
+     * @param int $expiresIn Expiration time in seconds (default: 600 = 10 minutes)
+     * @return string Authorization code
+     */
+    public function createAuthorizationCode(
+        string $clientId,
+        string $userId,
+        string $redirectUri,
+        array $scopes,
+        ?string $codeChallenge = null,
+        ?string $codeChallengeMethod = null,
+        int $expiresIn = 600
+    ): string;
+
+    /**
+     * Validate and consume an authorization code.
+     *
+     * @param string $code Authorization code
+     * @param string $clientId Client ID
+     * @param string $redirectUri Redirect URI (must match original)
+     * @param string|null $codeVerifier PKCE code verifier (required if PKCE was used)
+     * @return array{user_id: string, scopes: array<string>}|null Code data or null if invalid
+     */
+    public function validateAuthorizationCode(
+        string $code,
+        string $clientId,
+        string $redirectUri,
+        ?string $codeVerifier = null
+    ): ?array;
 }

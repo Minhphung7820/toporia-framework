@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Toporia\Framework\Auth\OAuth2\Repositories;
 
 use Toporia\Framework\Auth\OAuth2\Contracts\TokenRepositoryInterface;
-use Toporia\Framework\Auth\OAuth2\Models\{OAuth2AccessToken, OAuth2RefreshToken};
+use Toporia\Framework\Auth\OAuth2\Models\{OAuth2AccessToken, OAuth2AuthorizationCode, OAuth2RefreshToken};
 use Toporia\Framework\Hashing\HashManager;
 
 /**
@@ -300,5 +300,93 @@ final class TokenRepository implements TokenRepositoryInterface
         }
 
         return $secret;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function createAuthorizationCode(
+        string $clientId,
+        string $userId,
+        string $redirectUri,
+        array $scopes,
+        ?string $codeChallenge = null,
+        ?string $codeChallengeMethod = null,
+        int $expiresIn = 600
+    ): string {
+        // Generate secure random code
+        $code = bin2hex(random_bytes(32)); // 64 character hex string
+        $expiresAt = now()->getTimestamp() + $expiresIn;
+
+        // Store authorization code
+        OAuth2AuthorizationCode::create([
+            'code' => $this->hashToken($code),
+            'client_id' => $clientId,
+            'user_id' => $userId,
+            'redirect_uri' => $redirectUri,
+            'scopes' => $scopes,
+            'code_challenge' => $codeChallenge,
+            'code_challenge_method' => $codeChallengeMethod,
+            'expires_at' => now()->setTimestamp($expiresAt)->toDateTimeString(),
+        ]);
+
+        return $code;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function validateAuthorizationCode(
+        string $code,
+        string $clientId,
+        string $redirectUri,
+        ?string $codeVerifier = null
+    ): ?array {
+        $hashedCode = $this->hashToken($code);
+        $codeModel = OAuth2AuthorizationCode::where('code', $hashedCode)->first();
+
+        // Validate code exists
+        if ($codeModel === null) {
+            return null;
+        }
+
+        // Check if already used (prevents replay attacks)
+        if ($codeModel->isUsed()) {
+            return null;
+        }
+
+        // Check if expired
+        if ($codeModel->isExpired()) {
+            return null;
+        }
+
+        // Validate client ID matches
+        if ($codeModel->getAttribute('client_id') !== $clientId) {
+            return null;
+        }
+
+        // Validate redirect URI matches (critical for security)
+        if ($codeModel->getAttribute('redirect_uri') !== $redirectUri) {
+            return null;
+        }
+
+        // Validate PKCE if required
+        if ($codeModel->getAttribute('code_challenge') !== null) {
+            if ($codeVerifier === null) {
+                return null; // Code verifier required but not provided
+            }
+
+            if (!$codeModel->verifyCodeChallenge($codeVerifier)) {
+                return null; // Invalid code verifier
+            }
+        }
+
+        // Mark as used (single-use only)
+        $codeModel->markAsUsed();
+
+        return [
+            'user_id' => $codeModel->getAttribute('user_id'),
+            'scopes' => $codeModel->getAttribute('scopes') ?? [],
+        ];
     }
 }
