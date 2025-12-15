@@ -618,38 +618,72 @@ class Collection implements CollectionInterface, \JsonSerializable
     }
     /**
      * Get min value.
+     *
+     * Returns null for empty collections instead of throwing an error.
+     *
+     * @param string|callable|null $callback Key name or callback to extract value
+     * @return mixed Minimum value or null if empty
      */
     public function min(string|callable|null $callback = null): mixed
     {
-        if ($callback === null) {
-            return min($this->items);
+        if ($this->isEmpty()) {
+            return null;
         }
 
-        $callback = is_callable($callback) ? $callback : fn($item) => $item[$callback] ?? null;
+        if ($callback === null) {
+            $filtered = array_filter($this->items, fn($v) => $v !== null);
+            return empty($filtered) ? null : min($filtered);
+        }
 
-        return $this->map($callback)->filter()->min();
+        $extract = is_callable($callback)
+            ? $callback
+            : fn($item) => is_array($item) ? ($item[$callback] ?? null) : (is_object($item) ? ($item->{$callback} ?? null) : null);
+
+        $values = [];
+        foreach ($this->items as $k => $v) {
+            $val = $extract($v, $k);
+            if ($val !== null) {
+                $values[] = $val;
+            }
+        }
+
+        return empty($values) ? null : min($values);
     }
 
     /**
      * Get max value.
+     *
+     * Returns null for empty collections instead of throwing an error.
+     *
+     * @param string|callable|null $callback Key name or callback to extract value
+     * @return mixed Maximum value or null if empty
      */
     public function max(string|callable|null $callback = null): mixed
     {
-        $has = false;
-        $max = null;
+        if ($this->isEmpty()) {
+            return null;
+        }
+
         $extract = $callback === null
             ? fn($v) => $v
             : (is_callable($callback)
                 ? $callback
                 : fn($item) => is_array($item) ? ($item[$callback] ?? null) : (is_object($item) ? ($item->{$callback} ?? null) : null));
 
+        $has = false;
+        $max = null;
+
         foreach ($this->items as $k => $v) {
             $val = $extract($v, $k);
+            if ($val === null) {
+                continue;
+            }
             if (!$has || $val > $max) {
                 $max = $val;
                 $has = true;
             }
         }
+
         return $max;
     }
 
@@ -721,12 +755,42 @@ class Collection implements CollectionInterface, \JsonSerializable
 
     /**
      * Mode (most frequent value).
+     *
+     * Returns an array of the most frequently occurring values.
+     * Supports non-scalar values by hashing them for comparison.
+     *
+     * @param string|callable|null $callback Key name or callback to extract value
+     * @return array Most frequent values
      */
     public function mode(string|callable|null $callback = null): array
     {
-        $values = $callback === null ? $this : $this->map($callback);
+        if ($this->isEmpty()) {
+            return [];
+        }
 
-        $counts = array_count_values($values->all());
+        $extract = $callback === null
+            ? fn($v) => $v
+            : (is_callable($callback)
+                ? $callback
+                : fn($item) => is_array($item) ? ($item[$callback] ?? null) : (is_object($item) ? ($item->{$callback} ?? null) : null));
+
+        $counts = [];
+        $valueMap = []; // Map hash -> original value for non-scalars
+
+        foreach ($this->items as $k => $v) {
+            $value = $extract($v, $k);
+
+            // Handle non-scalar values by hashing
+            if (is_scalar($value) || is_null($value)) {
+                $key = $value === null ? '__null__' : (string)$value;
+                $valueMap[$key] = $value;
+            } else {
+                $key = md5(serialize($value));
+                $valueMap[$key] = $value;
+            }
+
+            $counts[$key] = ($counts[$key] ?? 0) + 1;
+        }
 
         if (empty($counts)) {
             return [];
@@ -734,7 +798,14 @@ class Collection implements CollectionInterface, \JsonSerializable
 
         $maxCount = max($counts);
 
-        return array_keys(array_filter($counts, fn($count) => $count === $maxCount));
+        $modes = [];
+        foreach ($counts as $key => $count) {
+            if ($count === $maxCount) {
+                $modes[] = $valueMap[$key];
+            }
+        }
+
+        return $modes;
     }
 
     /**
@@ -1319,24 +1390,39 @@ class Collection implements CollectionInterface, \JsonSerializable
 
     /**
      * Get duplicates.
+     *
+     * Returns the first occurrence of each duplicate item.
+     * Supports non-scalar values by hashing them for comparison.
+     *
+     * @param string|callable|null $key Key name or callback to extract comparison value
+     * @return static Collection containing duplicate items
      */
     public function duplicates(string|callable|null $key = null): static
     {
-        $callback = is_callable($key) ? $key : fn($item) => $key === null ? $item : ($item[$key] ?? null);
+        $extract = is_callable($key)
+            ? $key
+            : fn($item) => $key === null
+                ? $item
+                : (is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null));
 
         $counts = [];
         $duplicates = [];
 
         foreach ($this->items as $k => $item) {
-            $value = $callback($item, $k);
+            $value = $extract($item, $k);
 
-            if (!isset($counts[$value])) {
-                $counts[$value] = 0;
+            // Hash non-scalar values for comparison
+            $hashKey = is_scalar($value) || is_null($value)
+                ? ($value === null ? '__null__' : (is_bool($value) ? ($value ? '__true__' : '__false__') : (string)$value))
+                : md5(serialize($value));
+
+            if (!isset($counts[$hashKey])) {
+                $counts[$hashKey] = 0;
             }
 
-            $counts[$value]++;
+            $counts[$hashKey]++;
 
-            if ($counts[$value] === 2) {
+            if ($counts[$hashKey] === 2) {
                 $duplicates[$k] = $item;
             }
         }
@@ -1546,16 +1632,23 @@ class Collection implements CollectionInterface, \JsonSerializable
 
     /**
      * First or throw exception.
+     *
+     * Unlike first(), this properly checks if the collection is empty
+     * rather than checking if the result is null (which could be a valid value).
+     *
+     * @param callable|null $callback Optional filter callback
+     * @return mixed First item matching the callback
+     * @throws \RuntimeException When no items are found
      */
     public function firstOrFail(callable $callback = null): mixed
     {
-        $item = $this->first($callback);
+        $items = $callback === null ? $this : $this->filter($callback);
 
-        if ($item === null) {
+        if ($items->isEmpty()) {
             throw new \RuntimeException('No items found');
         }
 
-        return $item;
+        return $items->first();
     }
 
     public function keyBy(callable|string $key): static
@@ -1716,5 +1809,450 @@ class Collection implements CollectionInterface, \JsonSerializable
 
         // For base Collection, return items as-is
         return $this->items;
+    }
+
+    // ========================================
+    // WHERE METHODS (Laravel-compatible)
+    // ========================================
+
+    /**
+     * Filter items where key equals value (strict comparison).
+     *
+     * @param string $key Key to check
+     * @param mixed $value Value to match (strict ===)
+     * @return static
+     */
+    public function whereStrict(string $key, mixed $value): static
+    {
+        return $this->filter(function ($item) use ($key, $value) {
+            $actual = is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null);
+            return $actual === $value;
+        });
+    }
+
+    /**
+     * Filter items where key value is between min and max.
+     *
+     * @param string $key Key to check
+     * @param mixed $min Minimum value (inclusive)
+     * @param mixed $max Maximum value (inclusive)
+     * @return static
+     */
+    public function whereBetween(string $key, mixed $min, mixed $max): static
+    {
+        return $this->filter(function ($item) use ($key, $min, $max) {
+            $value = is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null);
+            return $value !== null && $value >= $min && $value <= $max;
+        });
+    }
+
+    /**
+     * Filter items where key value is not between min and max.
+     *
+     * @param string $key Key to check
+     * @param mixed $min Minimum value
+     * @param mixed $max Maximum value
+     * @return static
+     */
+    public function whereNotBetween(string $key, mixed $min, mixed $max): static
+    {
+        return $this->filter(function ($item) use ($key, $min, $max) {
+            $value = is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null);
+            return $value === null || $value < $min || $value > $max;
+        });
+    }
+
+    /**
+     * Filter items where key value is in the given array.
+     *
+     * @param string $key Key to check
+     * @param array $values Allowed values
+     * @param bool $strict Use strict comparison
+     * @return static
+     */
+    public function whereIn(string $key, array $values, bool $strict = false): static
+    {
+        return $this->filter(function ($item) use ($key, $values, $strict) {
+            $value = is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null);
+            return in_array($value, $values, $strict);
+        });
+    }
+
+    /**
+     * Filter items where key value is not in the given array.
+     *
+     * @param string $key Key to check
+     * @param array $values Disallowed values
+     * @param bool $strict Use strict comparison
+     * @return static
+     */
+    public function whereNotIn(string $key, array $values, bool $strict = false): static
+    {
+        return $this->filter(function ($item) use ($key, $values, $strict) {
+            $value = is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null);
+            return !in_array($value, $values, $strict);
+        });
+    }
+
+    /**
+     * Filter items where key value is null.
+     *
+     * @param string $key Key to check
+     * @return static
+     */
+    public function whereNull(string $key): static
+    {
+        return $this->filter(function ($item) use ($key) {
+            $value = is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null);
+            return $value === null;
+        });
+    }
+
+    /**
+     * Filter items where key value is not null.
+     *
+     * @param string $key Key to check
+     * @return static
+     */
+    public function whereNotNull(string $key): static
+    {
+        return $this->filter(function ($item) use ($key) {
+            $value = is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null);
+            return $value !== null;
+        });
+    }
+
+    /**
+     * Filter items that are instances of the given class.
+     *
+     * @param string $class Class name
+     * @return static
+     */
+    public function whereInstanceOf(string $class): static
+    {
+        return $this->filter(fn($item) => $item instanceof $class);
+    }
+
+    /**
+     * Filter items using a where clause (supports operators).
+     *
+     * @param string $key Key to check
+     * @param mixed $operator Operator or value (if value is omitted)
+     * @param mixed $value Value to compare (optional)
+     * @return static
+     */
+    public function where(string $key, mixed $operator = null, mixed $value = null): static
+    {
+        // If only 2 args, treat as where($key, $value) with '=' operator
+        if (func_num_args() === 2) {
+            $value = $operator;
+            $operator = '=';
+        }
+
+        return $this->filter(function ($item) use ($key, $operator, $value) {
+            $actual = is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->{$key} ?? null) : null);
+            return $this->compareValues($actual, $operator, $value);
+        });
+    }
+
+    // ========================================
+    // SORT METHODS
+    // ========================================
+
+    /**
+     * Sort by key in descending order.
+     *
+     * @param string|callable $callback Key name or callback
+     * @return static
+     */
+    public function sortByDesc(string|callable $callback): static
+    {
+        return $this->sortBy($callback, true);
+    }
+
+    /**
+     * Sort keys in descending order.
+     *
+     * @param int $flags Sort flags (SORT_REGULAR, SORT_NUMERIC, etc.)
+     * @return static
+     */
+    public function sortKeysDesc(int $flags = SORT_REGULAR): static
+    {
+        $items = $this->items;
+        krsort($items, $flags);
+        return new static($items);
+    }
+
+    // ========================================
+    // DOT NOTATION METHODS
+    // ========================================
+
+    /**
+     * Flatten a multi-dimensional associative array with dots.
+     *
+     * Example:
+     * ```php
+     * $collection = collect(['products' => ['desk' => ['price' => 100]]]);
+     * $flattened = $collection->dot();
+     * // ['products.desk.price' => 100]
+     * ```
+     *
+     * @param string $prepend Prefix for keys
+     * @return static
+     */
+    public function dot(string $prepend = ''): static
+    {
+        $results = [];
+
+        $flatten = function (array $array, string $prepend) use (&$flatten, &$results) {
+            foreach ($array as $key => $value) {
+                $newKey = $prepend === '' ? $key : $prepend . '.' . $key;
+
+                if (is_array($value) && !empty($value)) {
+                    $flatten($value, $newKey);
+                } else {
+                    $results[$newKey] = $value;
+                }
+            }
+        };
+
+        $flatten($this->items, $prepend);
+
+        return new static($results);
+    }
+
+    /**
+     * Convert a flattened "dot" notated array into an expanded array.
+     *
+     * Example:
+     * ```php
+     * $collection = collect(['products.desk.price' => 100]);
+     * $expanded = $collection->undot();
+     * // ['products' => ['desk' => ['price' => 100]]]
+     * ```
+     *
+     * @return static
+     */
+    public function undot(): static
+    {
+        $results = [];
+
+        foreach ($this->items as $key => $value) {
+            $keys = explode('.', (string)$key);
+            $current = &$results;
+
+            foreach ($keys as $i => $segment) {
+                if ($i === count($keys) - 1) {
+                    $current[$segment] = $value;
+                } else {
+                    if (!isset($current[$segment]) || !is_array($current[$segment])) {
+                        $current[$segment] = [];
+                    }
+                    $current = &$current[$segment];
+                }
+            }
+        }
+
+        return new static($results);
+    }
+
+    /**
+     * Get a value from a nested array using dot notation.
+     *
+     * @param string $key Dot notation key (e.g., 'user.profile.name')
+     * @param mixed $default Default value if not found
+     * @return mixed
+     */
+    public function getDot(string $key, mixed $default = null): mixed
+    {
+        $array = $this->items;
+        $keys = explode('.', $key);
+
+        foreach ($keys as $segment) {
+            if (!is_array($array) || !array_key_exists($segment, $array)) {
+                return $default;
+            }
+            $array = $array[$segment];
+        }
+
+        return $array;
+    }
+
+    /**
+     * Check if a key exists using dot notation.
+     *
+     * @param string $key Dot notation key
+     * @return bool
+     */
+    public function hasDot(string $key): bool
+    {
+        $array = $this->items;
+        $keys = explode('.', $key);
+
+        foreach ($keys as $segment) {
+            if (!is_array($array) || !array_key_exists($segment, $array)) {
+                return false;
+            }
+            $array = $array[$segment];
+        }
+
+        return true;
+    }
+
+    // ========================================
+    // ADDITIONAL UTILITY METHODS
+    // ========================================
+
+    /**
+     * Collapse an array of arrays into a single array.
+     *
+     * Example:
+     * ```php
+     * $collection = collect([[1, 2], [3, 4], [5]]);
+     * $collapsed = $collection->collapse();
+     * // [1, 2, 3, 4, 5]
+     * ```
+     *
+     * @return static
+     */
+    public function collapse(): static
+    {
+        $results = [];
+
+        foreach ($this->items as $item) {
+            if ($item instanceof self) {
+                $item = $item->all();
+            }
+
+            if (is_array($item)) {
+                $results = array_merge($results, $item);
+            }
+        }
+
+        return new static($results);
+    }
+
+    /**
+     * Get the underlying items from the given collection if applicable.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    public static function unwrap(mixed $value): mixed
+    {
+        return $value instanceof self ? $value->all() : $value;
+    }
+
+    /**
+     * Pipe the collection into the given class.
+     *
+     * @param string $class Class name to instantiate
+     * @return mixed
+     */
+    public function pipeInto(string $class): mixed
+    {
+        return new $class($this);
+    }
+
+    /**
+     * Pass the collection through a series of callable pipes.
+     *
+     * @param array<callable> $callbacks Array of callables
+     * @return mixed
+     */
+    public function pipeThrough(array $callbacks): mixed
+    {
+        return array_reduce($callbacks, fn($carry, $callback) => $callback($carry), $this);
+    }
+
+    /**
+     * Map a collection and flatten the result by a single level, passing keys.
+     *
+     * @param callable $callback Callback receiving ($value, $key) and returning array
+     * @return static
+     */
+    public function mapSpread(callable $callback): static
+    {
+        return $this->map(function ($item, $key) use ($callback) {
+            if (is_array($item)) {
+                return $callback(...array_values($item));
+            }
+            return $callback($item);
+        });
+    }
+
+    /**
+     * Execute a callback over each item with spread parameters.
+     *
+     * @param callable $callback Callback receiving spread array values
+     * @return static
+     */
+    public function eachSpread(callable $callback): static
+    {
+        foreach ($this->items as $key => $item) {
+            if (is_array($item)) {
+                if ($callback(...array_values($item)) === false) {
+                    break;
+                }
+            } else {
+                if ($callback($item) === false) {
+                    break;
+                }
+            }
+        }
+
+        return $this;
+    }
+
+    /**
+     * Split the collection into the given number of groups.
+     *
+     * Unlike split(), this ensures each group has roughly equal size.
+     *
+     * @param int $numberOfGroups Number of groups
+     * @return static
+     */
+    public function splitIn(int $numberOfGroups): static
+    {
+        if ($this->isEmpty() || $numberOfGroups <= 0) {
+            return new static();
+        }
+
+        $count = $this->count();
+        $groupSize = (int) ceil($count / $numberOfGroups);
+
+        return $this->chunk($groupSize);
+    }
+
+    /**
+     * Skip the last N items.
+     *
+     * @param int $count Number of items to skip from end
+     * @return static
+     */
+    public function skipLast(int $count): static
+    {
+        if ($count <= 0) {
+            return new static($this->items);
+        }
+
+        $total = $this->count();
+        if ($count >= $total) {
+            return new static();
+        }
+
+        return $this->take($total - $count);
+    }
+
+    /**
+     * Get a lazy collection for the items in this collection.
+     *
+     * Alias for toLazy() for Laravel compatibility.
+     *
+     * @return LazyCollection
+     */
+    public function lazy(): LazyCollection
+    {
+        return $this->toLazy();
     }
 }

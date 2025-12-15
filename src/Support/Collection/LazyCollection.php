@@ -614,21 +614,38 @@ class LazyCollection implements IteratorAggregate, Countable, CollectionInterfac
 
     /**
      * Remember items (cache in memory for multi-pass).
+     *
+     * This method caches all items from the lazy collection on first iteration,
+     * allowing subsequent iterations to use the cached data without re-executing
+     * the source generator.
+     *
+     * Performance:
+     * - First pass: O(n) time, O(n) memory (builds cache)
+     * - Subsequent passes: O(n) time, O(1) additional memory (uses cache)
+     *
+     * @return static
      */
     public function remember(): static
     {
         $cache = [];
+        $consumed = false;
         $sourceProducer = $this->producer;
 
-        return new static(function () use (&$cache, $sourceProducer) {
-            // yield cache trước
-            foreach ($cache as $k => $v) yield $k => $v;
+        return new static(function () use (&$cache, &$consumed, $sourceProducer) {
+            // If already consumed, yield from cache only
+            if ($consumed) {
+                foreach ($cache as $k => $v) {
+                    yield $k => $v;
+                }
+                return;
+            }
 
-            // sau đó consume source và fill cache
+            // First pass: consume source, fill cache, and yield
             foreach ($sourceProducer() as $k => $v) {
                 $cache[$k] = $v;
                 yield $k => $v;
             }
+            $consumed = true;
         });
     }
 
