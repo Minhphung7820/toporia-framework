@@ -112,6 +112,18 @@ abstract class Factory implements FactoryInterface
     protected array $has = [];
 
     /**
+     * Parent relationships to set (belongs-to).
+     * @var array<string, array{0: FactoryInterface|Model, 1: string}>
+     */
+    protected array $for = [];
+
+    /**
+     * Many-to-many relationships with pivot data.
+     * @var array<string, array{0: FactoryInterface|array, 1: int, 2: array}>
+     */
+    protected array $hasAttached = [];
+
+    /**
      * Factory configuration.
      * @var array<string, mixed>
      */
@@ -249,6 +261,130 @@ abstract class Factory implements FactoryInterface
     public function has(FactoryInterface $factory, string $relationship, int $count = 1, array $attributes = []): static
     {
         $this->has[$relationship] = [$factory, $count, $attributes];
+        return $this;
+    }
+
+    /**
+     * Define a parent relationship (belongs-to).
+     *
+     * Sets up the foreign key for a belongs-to relationship.
+     * Automatically creates the parent model if a factory is provided,
+     * or uses an existing model instance.
+     *
+     * Usage:
+     * ```php
+     * PostFactory::new()
+     *     ->for(UserFactory::new(), 'user')
+     *     ->create();
+     * // Or with existing model:
+     * PostFactory::new()
+     *     ->for($existingUser, 'user')
+     *     ->create();
+     * ```
+     *
+     * Laravel-compatible syntax with automatic foreign key detection:
+     * ```php
+     * PostFactory::new()
+     *     ->for(UserFactory::new()) // Assumes 'user' relationship
+     *     ->create();
+     * ```
+     *
+     * @param FactoryInterface|Model $factory Parent factory or model instance
+     * @param string|null $relationship Relationship name (defaults to parent model name)
+     * @return static
+     */
+    public function for(FactoryInterface|Model $factory, ?string $relationship = null): static
+    {
+        // Auto-detect relationship name from factory if not provided
+        if ($relationship === null && $factory instanceof FactoryInterface) {
+            // Extract model name from factory's model property
+            $modelClass = $factory instanceof Factory ? $this->getModelFromFactory($factory) : null;
+            if ($modelClass) {
+                $relationship = strtolower(class_basename($modelClass));
+            }
+        }
+
+        if ($relationship === null) {
+            throw new \InvalidArgumentException('Relationship name is required when providing a model instance.');
+        }
+
+        $this->for[$relationship] = [$factory, $relationship];
+        return $this;
+    }
+
+    /**
+     * Get model class from a factory instance.
+     *
+     * @param Factory $factory
+     * @return string|null
+     */
+    protected function getModelFromFactory(Factory $factory): ?string
+    {
+        // Use reflection to access protected $model property
+        try {
+            $reflection = new \ReflectionClass($factory);
+            $property = $reflection->getProperty('model');
+            $property->setAccessible(true);
+            return $property->getValue($factory);
+        } catch (\ReflectionException $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Define a many-to-many relationship with pivot data.
+     *
+     * Attaches related models via pivot table with optional pivot attributes.
+     * Supports both factory instances and existing model arrays.
+     *
+     * Usage:
+     * ```php
+     * // Attach 3 roles via pivot table
+     * UserFactory::new()
+     *     ->hasAttached(RoleFactory::new(), 3, 'roles', ['assigned_at' => now()])
+     *     ->create();
+     *
+     * // Attach existing models
+     * $roles = [Role::find(1), Role::find(2)];
+     * UserFactory::new()
+     *     ->hasAttached($roles, count($roles), 'roles')
+     *     ->create();
+     * ```
+     *
+     * Laravel-compatible syntax:
+     * ```php
+     * UserFactory::new()
+     *     ->hasAttached(RoleFactory::new()->count(3), 'roles')
+     *     ->create();
+     * ```
+     *
+     * @param FactoryInterface|array $factoryOrModels Related factory or array of models
+     * @param int $count Number of models to attach (ignored if array provided)
+     * @param string $relationship Relationship name
+     * @param array $pivotAttributes Pivot table attributes
+     * @return static
+     */
+    public function hasAttached(
+        FactoryInterface|array $factoryOrModels,
+        int|string $countOrRelationship = 1,
+        ?string $relationship = null,
+        array $pivotAttributes = []
+    ): static {
+        // Handle flexible parameter order (Laravel-compatible)
+        if (is_string($countOrRelationship)) {
+            // hasAttached($factory, 'roles') - relationship name as second param
+            $relationship = $countOrRelationship;
+            $count = 1;
+        } else {
+            // hasAttached($factory, 3, 'roles') - count as second param
+            $count = $countOrRelationship;
+        }
+
+        if ($relationship === null) {
+            throw new \InvalidArgumentException('Relationship name is required for hasAttached().');
+        }
+
+        $this->hasAttached[$relationship] = [$factoryOrModels, $count, $pivotAttributes];
         return $this;
     }
 
@@ -465,6 +601,7 @@ abstract class Factory implements FactoryInterface
      */
     protected function createRelationships(Model $model): void
     {
+        // Handle has() relationships (one-to-many)
         foreach ($this->has as $relationship => [$factory, $count, $attributes]) {
             $relatedModels = $factory->createMany($count, $attributes);
 
@@ -476,6 +613,33 @@ abstract class Factory implements FactoryInterface
                         $relation->save($relatedModel);
                     } elseif (method_exists($relation, 'attach')) {
                         $relation->attach($relatedModel->id);
+                    }
+                }
+            }
+        }
+
+        // Handle hasAttached() relationships (many-to-many with pivot)
+        foreach ($this->hasAttached as $relationship => [$factoryOrModels, $count, $pivotAttributes]) {
+            $relatedModels = [];
+
+            // Get or create related models
+            if (is_array($factoryOrModels)) {
+                // Use existing models
+                $relatedModels = $factoryOrModels;
+            } elseif ($factoryOrModels instanceof FactoryInterface) {
+                // Create models from factory
+                $relatedModels = $factoryOrModels->createMany($count);
+            }
+
+            // Attach to pivot table
+            if (method_exists($model, $relationship)) {
+                $relation = $model->$relationship();
+
+                if (method_exists($relation, 'attach')) {
+                    foreach ($relatedModels as $relatedModel) {
+                        if ($relatedModel instanceof Model) {
+                            $relation->attach($relatedModel->id, $pivotAttributes);
+                        }
                     }
                 }
             }
@@ -505,6 +669,20 @@ abstract class Factory implements FactoryInterface
             } elseif (is_array($sequence)) {
                 $index = $this->sequenceIndex % count($sequence);
                 $attributes[$key] = $sequence[$index];
+            }
+        }
+
+        // Apply for() relationships (belongs-to)
+        foreach ($this->for as $relationship => [$factoryOrModel, $relationName]) {
+            // Determine foreign key name (e.g., user_id for 'user')
+            $foreignKey = $relationship . '_id';
+
+            // Create or use parent model
+            if ($factoryOrModel instanceof FactoryInterface) {
+                $parent = $factoryOrModel->create();
+                $attributes[$foreignKey] = $parent->id;
+            } elseif ($factoryOrModel instanceof Model) {
+                $attributes[$foreignKey] = $factoryOrModel->id;
             }
         }
 
@@ -571,6 +749,160 @@ abstract class Factory implements FactoryInterface
     }
 
     /**
+     * Magic method for fluent relationship methods.
+     *
+     * Supports Laravel-style dynamic relationship methods:
+     * - `hasPosts(3)` → `has(PostFactory::new(), 'posts', 3)`
+     * - `forUser()` → `for(UserFactory::new(), 'user')`
+     * - `hasAttachedRoles(3, ['admin' => true])` → `hasAttached(RoleFactory::new(), 3, 'roles', ['admin' => true])`
+     *
+     * Pattern matching:
+     * - `has{Relationship}($count = 1, $attributes = [])` → has() relationship
+     * - `for{Relationship}()` → for() relationship
+     * - `hasAttached{Relationship}($count = 1, $pivotAttributes = [])` → hasAttached() relationship
+     *
+     * Usage:
+     * ```php
+     * UserFactory::new()
+     *     ->hasPosts(5)
+     *     ->hasComments(10, ['approved' => true])
+     *     ->create();
+     *
+     * PostFactory::new()
+     *     ->forUser()
+     *     ->hasAttachedTags(3, ['created_at' => now()])
+     *     ->create();
+     * ```
+     *
+     * @param string $method Method name
+     * @param array $parameters Method parameters
+     * @return static
+     * @throws \BadMethodCallException If method pattern is not recognized
+     */
+    public function __call(string $method, array $parameters): static
+    {
+        // Match hasAttached{Relationship}() pattern
+        if (preg_match('/^hasAttached([A-Z].*)$/', $method, $matches)) {
+            $relationship = $this->pluralizeRelationship($matches[1]);
+            $factoryClass = $this->resolveFactoryClass($matches[1]);
+
+            $count = $parameters[0] ?? 1;
+            $pivotAttributes = $parameters[1] ?? [];
+
+            return $this->hasAttached(
+                $factoryClass::new(),
+                $count,
+                $relationship,
+                $pivotAttributes
+            );
+        }
+
+        // Match has{Relationship}() pattern
+        if (preg_match('/^has([A-Z].*)$/', $method, $matches)) {
+            $relationship = $this->pluralizeRelationship($matches[1]);
+            $factoryClass = $this->resolveFactoryClass($matches[1]);
+
+            $count = $parameters[0] ?? 1;
+            $attributes = $parameters[1] ?? [];
+
+            return $this->has($factoryClass::new(), $relationship, $count, $attributes);
+        }
+
+        // Match for{Relationship}() pattern
+        if (preg_match('/^for([A-Z].*)$/', $method, $matches)) {
+            $relationship = $this->singularizeRelationship($matches[1]);
+            $factoryClass = $this->resolveFactoryClass($matches[1]);
+
+            return $this->for($factoryClass::new(), $relationship);
+        }
+
+        throw new \BadMethodCallException(
+            "Call to undefined method " . static::class . "::{$method}(). " .
+            "Magic methods support: has{Relationship}(), for{Relationship}(), hasAttached{Relationship}()."
+        );
+    }
+
+    /**
+     * Resolve factory class from relationship name.
+     *
+     * Converts relationship name to factory class name.
+     * Examples:
+     * - Posts → PostFactory
+     * - Comments → CommentFactory
+     * - Users → UserFactory
+     *
+     * @param string $relationship Relationship name (PascalCase)
+     * @return string Factory class name
+     */
+    protected function resolveFactoryClass(string $relationship): string
+    {
+        // Remove trailing 's' for plural relationships
+        $singular = rtrim($relationship, 's');
+
+        // Try common factory locations
+        $possibleFactories = [
+            "Database\\Factories\\{$singular}Factory",
+            "App\\Database\\Factories\\{$singular}Factory",
+            "{$singular}Factory",
+        ];
+
+        foreach ($possibleFactories as $factoryClass) {
+            if (class_exists($factoryClass)) {
+                return $factoryClass;
+            }
+        }
+
+        // Fallback to first option (will fail gracefully if not found)
+        return $possibleFactories[0];
+    }
+
+    /**
+     * Pluralize relationship name for has() methods.
+     *
+     * @param string $relationship Relationship name
+     * @return string Pluralized relationship name (lowercase)
+     */
+    protected function pluralizeRelationship(string $relationship): string
+    {
+        // Simple pluralization (can be enhanced with proper library)
+        $lowercase = strtolower($relationship);
+
+        // Already plural
+        if (substr($lowercase, -1) === 's') {
+            return $lowercase;
+        }
+
+        // Simple pluralization rules
+        if (substr($lowercase, -1) === 'y') {
+            return substr($lowercase, 0, -1) . 'ies'; // category → categories
+        }
+
+        return $lowercase . 's'; // post → posts
+    }
+
+    /**
+     * Singularize relationship name for for() methods.
+     *
+     * @param string $relationship Relationship name
+     * @return string Singularized relationship name (lowercase)
+     */
+    protected function singularizeRelationship(string $relationship): string
+    {
+        $lowercase = strtolower($relationship);
+
+        // Simple singularization (can be enhanced)
+        if (substr($lowercase, -3) === 'ies') {
+            return substr($lowercase, 0, -3) . 'y'; // categories → category
+        }
+
+        if (substr($lowercase, -1) === 's') {
+            return substr($lowercase, 0, -1); // posts → post
+        }
+
+        return $lowercase;
+    }
+
+    /**
      * Reset factory state.
      *
      * @return static
@@ -581,6 +913,8 @@ abstract class Factory implements FactoryInterface
         $this->sequenceIndex = 0;
         $this->count = 1;
         $this->has = [];
+        $this->for = [];
+        $this->hasAttached = [];
         $this->recycle = [];
         $this->config = [];
         return $this;

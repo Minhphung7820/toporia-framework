@@ -31,6 +31,13 @@ use Toporia\Framework\Database\ORM\Model;
 abstract class Seeder implements SeederInterface
 {
     /**
+     * Track which seeders have been called once (for idempotency).
+     *
+     * @var array<string, bool>
+     */
+    protected static array $calledOnce = [];
+
+    /**
      * Database manager instance.
      *
      * @var DatabaseManager|null
@@ -150,6 +157,57 @@ abstract class Seeder implements SeederInterface
         foreach ($seeders as $seederClass) {
             $this->call($seederClass);
         }
+    }
+
+    /**
+     * Call another seeder class only once (idempotent seeding).
+     *
+     * Ensures a seeder is only executed once during the entire seeding process,
+     * even if called multiple times from different seeders. Useful for shared
+     * reference data that should only be seeded once.
+     *
+     * Usage:
+     * ```php
+     * // In UserSeeder.php
+     * protected function seed(): void
+     * {
+     *     $this->callOnce(CountrySeeder::class); // Seeds countries once
+     *     // ... user seeding logic
+     * }
+     *
+     * // In ProductSeeder.php
+     * protected function seed(): void
+     * {
+     *     $this->callOnce(CountrySeeder::class); // Skipped (already called)
+     *     // ... product seeding logic
+     * }
+     * ```
+     *
+     * @param class-string<Seeder> $seederClass
+     * @return void
+     */
+    protected function callOnce(string $seederClass): void
+    {
+        // Check if this seeder has already been called
+        if (isset(self::$calledOnce[$seederClass])) {
+            return;
+        }
+
+        // Mark as called before execution to prevent infinite recursion
+        self::$calledOnce[$seederClass] = true;
+
+        // Call the seeder
+        $this->call($seederClass);
+    }
+
+    /**
+     * Reset the callOnce tracking (useful for testing).
+     *
+     * @return void
+     */
+    public static function resetCallOnce(): void
+    {
+        self::$calledOnce = [];
     }
 
     /**
