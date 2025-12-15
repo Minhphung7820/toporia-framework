@@ -7,6 +7,8 @@ namespace Toporia\Framework\Http;
 use Toporia\Framework\Container\Contracts\ContainerInterface;
 use Toporia\Framework\Http\Contracts\RequestInterface;
 use Toporia\Framework\Http\Request;
+use Toporia\Framework\Http\Response;
+use Toporia\Framework\Http\Middleware\MiddlewarePipeline;
 use Toporia\Framework\Routing\Contracts\RouterInterface;
 
 
@@ -48,6 +50,13 @@ class Kernel
     protected array $middlewareAliases = [];
 
     /**
+     * Middleware pipeline builder.
+     *
+     * @var MiddlewarePipeline|null
+     */
+    protected ?MiddlewarePipeline $pipeline = null;
+
+    /**
      * @param ContainerInterface $container
      * @param RouterInterface $router
      */
@@ -59,18 +68,40 @@ class Kernel
     /**
      * Handle an incoming HTTP request.
      *
+     * Executes the global middleware pipeline before routing.
+     * Global middleware wraps the entire application, running on every request.
+     *
+     * Pipeline flow:
+     * 1. Global Middleware (outermost layer)
+     * 2. Router dispatch (route matching + route middleware)
+     * 3. Controller/Action
+     *
      * @param RequestInterface $request
      * @return void
      */
     public function handle(RequestInterface $request): void
     {
-        // Bind the request to container so Router can access it
+        // Bind the request to container so dependencies can resolve it
         $this->container->instance(RequestInterface::class, $request);
         $this->container->instance(Request::class, $request);
 
-        // In future: Run global middleware here
-        // For now, delegate directly to router
-        $this->router->dispatch();
+        // Get or create response instance
+        $response = $this->container->get(Response::class);
+
+        // If no global middleware, delegate directly to router (fast path)
+        if (empty($this->middleware)) {
+            $this->router->dispatch();
+            return;
+        }
+
+        // Build global middleware pipeline around router dispatch
+        $pipeline = $this->getMiddlewarePipeline();
+        $coreHandler = fn(Request $req, Response $res) => $this->router->dispatch();
+
+        $handler = $pipeline->build($this->middleware, $coreHandler);
+
+        // Execute pipeline
+        $handler($request, $response);
     }
 
     /**
@@ -126,5 +157,21 @@ class Kernel
     public function resolveMiddleware(string $alias): string
     {
         return $this->middlewareAliases[$alias] ?? $alias;
+    }
+
+    /**
+     * Get or create middleware pipeline.
+     *
+     * Lazy initialization with alias registration.
+     *
+     * @return MiddlewarePipeline
+     */
+    protected function getMiddlewarePipeline(): MiddlewarePipeline
+    {
+        if ($this->pipeline === null) {
+            $this->pipeline = new MiddlewarePipeline($this->container, $this->middlewareAliases);
+        }
+
+        return $this->pipeline;
     }
 }

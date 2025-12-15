@@ -78,6 +78,11 @@ final class Router implements RouterInterface
     private mixed $fallbackHandler = null;
 
     /**
+     * @var RoutePerformanceMonitor|null Optional performance monitor
+     */
+    private ?RoutePerformanceMonitor $performanceMonitor = null;
+
+    /**
      * @param Request $request Current HTTP request.
      * @param Response $response HTTP response handler.
      * @param ContainerInterface $container Dependency injection container.
@@ -451,8 +456,16 @@ final class Router implements RouterInterface
     {
         $handler = $route->getHandler();
 
+        // Start performance monitoring (zero overhead if disabled)
+        if ($this->performanceMonitor !== null) {
+            $this->performanceMonitor->start();
+        }
+
         // Apply route model binding if configured
         if ($this->modelBinding !== null) {
+            // Auto-discover model bindings from type hints before resolving
+            $this->modelBinding->discoverFromRoute($route);
+
             $parameters = $this->modelBinding->resolve($parameters, $route);
         }
 
@@ -470,6 +483,11 @@ final class Router implements RouterInterface
 
         // Execute pipeline and get result
         $result = $pipeline($this->request, $this->response);
+
+        // End performance monitoring
+        if ($this->performanceMonitor !== null) {
+            $this->performanceMonitor->end($route);
+        }
 
         // Handle response
         $this->sendResponse($result);
@@ -862,5 +880,27 @@ final class Router implements RouterInterface
     public function getSubdomainParameter(string $key, ?string $default = null): ?string
     {
         return $this->getSubdomainRouter()->getSubdomainParameter($key, $default);
+    }
+
+    /**
+     * Set performance monitor.
+     *
+     * @param RoutePerformanceMonitor $monitor Performance monitor instance
+     * @return self
+     */
+    public function setPerformanceMonitor(RoutePerformanceMonitor $monitor): self
+    {
+        $this->performanceMonitor = $monitor;
+        return $this;
+    }
+
+    /**
+     * Get performance monitor.
+     *
+     * @return RoutePerformanceMonitor|null
+     */
+    public function getPerformanceMonitor(): ?RoutePerformanceMonitor
+    {
+        return $this->performanceMonitor;
     }
 }

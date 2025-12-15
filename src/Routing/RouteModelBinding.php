@@ -7,6 +7,7 @@ namespace Toporia\Framework\Routing;
 use Toporia\Framework\Container\Contracts\ContainerInterface;
 use Toporia\Framework\Database\ORM\Model;
 use Toporia\Framework\Http\Exceptions\NotFoundHttpException;
+use Toporia\Framework\Routing\Contracts\RouteInterface;
 
 /**
  * Class RouteModelBinding
@@ -401,5 +402,85 @@ class RouteModelBinding
     public function getImplicitBindings(): array
     {
         return $this->implicitBindings;
+    }
+
+    /**
+     * Auto-discover model bindings from controller method type hints.
+     *
+     * This method automatically registers implicit model bindings by inspecting
+     * the controller method's parameter type hints. If a parameter is type-hinted
+     * with a Model subclass, it will be automatically bound.
+     *
+     * Example:
+     * ```php
+     * public function show(User $user) {
+     *     // $user is automatically resolved from {user} route parameter
+     * }
+     * ```
+     *
+     * @param RouteInterface $route Current route
+     * @return void
+     */
+    public function discoverFromRoute(RouteInterface $route): void
+    {
+        $handler = $route->getHandler();
+
+        // Only process array handlers [ControllerClass, 'method']
+        if (!is_array($handler) || count($handler) !== 2) {
+            return;
+        }
+
+        [$controllerClass, $method] = $handler;
+
+        // Ensure it's a valid controller class
+        if (!is_string($controllerClass) || !class_exists($controllerClass)) {
+            return;
+        }
+
+        try {
+            $reflection = new \ReflectionMethod($controllerClass, $method);
+        } catch (\ReflectionException $e) {
+            return; // Method doesn't exist, skip
+        }
+
+        // Inspect each parameter
+        foreach ($reflection->getParameters() as $parameter) {
+            $type = $parameter->getType();
+
+            // Skip if no type hint or not a class type
+            if (!$type instanceof \ReflectionNamedType || $type->isBuiltin()) {
+                continue;
+            }
+
+            $className = $type->getName();
+
+            // Check if it's a Model subclass
+            if (!is_subclass_of($className, Model::class)) {
+                continue;
+            }
+
+            $parameterName = $parameter->getName();
+
+            // Auto-register implicit binding if not already registered
+            if (!isset($this->bindings[$parameterName]) && !isset($this->implicitBindings[$parameterName])) {
+                $this->implicitBindings[$parameterName] = $className;
+            }
+        }
+    }
+
+    /**
+     * Enable automatic type hint discovery for all routes.
+     *
+     * This should be called during application bootstrap to enable
+     * automatic model binding from controller type hints.
+     *
+     * @param bool $enable Whether to enable auto-discovery
+     * @return static
+     */
+    public function enableAutoDiscovery(bool $enable = true): static
+    {
+        // This is a marker method - actual discovery happens per-route
+        // when resolving parameters
+        return $this;
     }
 }
