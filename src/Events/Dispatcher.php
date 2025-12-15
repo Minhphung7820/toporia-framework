@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Toporia\Framework\Events;
 
-use Toporia\Framework\Events\Contracts\{EventDispatcherInterface, EventInterface, ListenerInterface, SubscriberInterface, ShouldQueue};
+use Toporia\Framework\Events\Contracts\{EventDispatcherInterface, EventInterface, ListenerInterface, SubscriberInterface, ShouldQueue, ShouldBroadcast};
 use Toporia\Framework\Events\Exceptions\{EventException, ListenerException, CircularDispatchException, QueueNotAvailableException};
+use Toporia\Framework\Events\Broadcasting\BroadcastEvent;
 use Toporia\Framework\Container\Contracts\ContainerInterface;
 use Toporia\Framework\Queue\Contracts\QueueInterface;
 
@@ -230,6 +231,9 @@ final class Dispatcher implements EventDispatcherInterface
 
                 $this->callListener($listener, $event, $eventName);
             }
+
+            // Handle event broadcasting if implements ShouldBroadcast
+            $this->handleBroadcasting($event);
 
             return $event;
         } finally {
@@ -736,5 +740,75 @@ final class Dispatcher implements EventDispatcherInterface
     public function getDispatchStack(): array
     {
         return $this->dispatchStack;
+    }
+
+    /**
+     * Handle event broadcasting if event implements ShouldBroadcast.
+     *
+     * Automatically broadcasts events to realtime channels after dispatch.
+     * Supports both sync and queued broadcasting based on ShouldQueue interface.
+     *
+     * @param EventInterface $event Event to potentially broadcast
+     * @return void
+     */
+    private function handleBroadcasting(EventInterface $event): void
+    {
+        // Skip if event doesn't implement ShouldBroadcast
+        if (!$event instanceof ShouldBroadcast) {
+            return;
+        }
+
+        // Check conditional broadcasting (broadcastIf method)
+        if (method_exists($event, 'broadcastIf') && !$event->broadcastIf()) {
+            return;
+        }
+
+        // Check afterCommit flag (if database transaction support exists)
+        if (property_exists($event, 'afterCommit') && $event->afterCommit === true) {
+            // Schedule broadcast after DB commit
+            $this->broadcastAfterCommit($event);
+            return;
+        }
+
+        // Determine if broadcasting should be queued
+        $shouldQueue = $event instanceof ShouldQueue;
+
+        if ($shouldQueue && $this->queue !== null) {
+            // Queue the broadcast job
+            $job = new BroadcastEvent($event);
+            $this->queue->push($job);
+        } else {
+            // Broadcast synchronously
+            $this->broadcastNow($event);
+        }
+    }
+
+    /**
+     * Broadcast event immediately (synchronous).
+     *
+     * @param ShouldBroadcast $event Event to broadcast
+     * @return void
+     */
+    private function broadcastNow(ShouldBroadcast $event): void
+    {
+        // Use the BroadcastEvent job's logic directly
+        $job = new BroadcastEvent($event);
+        $job->handle();
+    }
+
+    /**
+     * Schedule broadcast after database transaction commit.
+     *
+     * Note: This is a placeholder for future transaction-aware broadcasting.
+     * Currently falls back to immediate broadcast.
+     *
+     * @param ShouldBroadcast $event Event to broadcast
+     * @return void
+     */
+    private function broadcastAfterCommit(ShouldBroadcast $event): void
+    {
+        // TODO: Integrate with database transaction manager when available
+        // For now, broadcast immediately
+        $this->broadcastNow($event);
     }
 }
