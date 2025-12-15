@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+use Toporia\Framework\Database\Migration\Migration;
+
+/**
+ * {{ description }}
+ */
+return new class extends Migration
+{
+    /**
+     * Run the migration.
+     */
+    public function up(): void
+    {
+        $this->schema->create('{{ table }}', function ($table) {
+            $table->id();
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * Reverse the migration.
+     */
+    public function down(): void
+    {
+        $this->schema->dropIfExists('{{ table }}');
+    }
+};

@@ -25,7 +25,7 @@ use Toporia\Framework\Database\Migration\Migrator;
  */
 final class MigrateRollbackCommand extends Command
 {
-    protected string $signature = 'migrate:rollback';
+    protected string $signature = 'migrate:rollback {--step=1 : Number of batches to rollback} {--path= : Custom path to migrations directory}';
     protected string $description = 'Rollback database migrations';
 
     private const COLOR_RESET = "\033[0m";
@@ -55,11 +55,12 @@ final class MigrateRollbackCommand extends Command
             $connection = $this->db->connection();
             $migrator = new Migrator($connection);
 
-            // Get migrations path
-            $migrationsPath = $this->getBasePath() . '/database/migrations';
+            // Get migrations path (from option or default)
+            $migrationsPath = $this->option('path')
+                ?: $this->getBasePath() . '/database/migrations';
 
             if (!is_dir($migrationsPath)) {
-                $this->printError('Migrations directory not found!');
+                $this->printError("Migrations directory not found: {$migrationsPath}");
                 return 1;
             }
 

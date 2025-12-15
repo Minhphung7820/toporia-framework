@@ -58,30 +58,43 @@ final class Migrator
      *
      * @param string $path Path to migrations directory
      * @param callable|null $callback Progress callback (migration name, status)
+     * @param bool $pretend If true, dump SQL without executing
      * @return array Ran migrations
      */
-    public function run(string $path, ?callable $callback = null): array
+    public function run(string $path, ?callable $callback = null, bool $pretend = false): array
     {
-        // Ensure repository exists
-        $this->ensureRepositoryExists();
+        // Ensure repository exists (not needed in pretend mode)
+        if (!$pretend) {
+            $this->ensureRepositoryExists();
+        }
 
         // Get pending migrations
         $files = $this->getMigrationFiles($path);
-        $ran = $this->repository->getRan();
-        $pending = array_diff($files, $ran);
+
+        if (!$pretend) {
+            $ran = $this->repository->getRan();
+            $pending = array_diff($files, $ran);
+        } else {
+            // In pretend mode, show all migrations (can't check database)
+            $pending = $files;
+        }
 
         if (empty($pending)) {
             return [];
         }
 
         // Get next batch number
-        $batch = $this->repository->getNextBatchNumber();
+        $batch = $pretend ? 0 : $this->repository->getNextBatchNumber();
 
         // Run pending migrations
         $ranMigrations = [];
 
         foreach ($pending as $file) {
-            $this->runMigration($path, $file, $batch, $callback);
+            if ($pretend) {
+                $this->pretendMigration($path, $file, $callback);
+            } else {
+                $this->runMigration($path, $file, $batch, $callback);
+            }
             $ranMigrations[] = $file;
         }
 
@@ -227,6 +240,46 @@ final class Migrator
     }
 
     /**
+     * Pretend to run migration (show SQL without executing).
+     *
+     * Note: This is a simplified pretend mode that shows the migration class name
+     * and basic info. Full SQL query preview would require Schema Builder modifications.
+     *
+     * @param string $path Path to migrations directory
+     * @param string $file Migration filename
+     * @param callable|null $callback Progress callback
+     * @return void
+     */
+    private function pretendMigration(string $path, string $file, ?callable $callback = null): void
+    {
+        try {
+            // Load migration to verify it's valid
+            $migration = $this->resolveMigration($path, $file);
+
+            // Extract migration class info
+            $className = get_class($migration);
+            $isAnonymous = str_contains($className, 'class@anonymous');
+
+            $info = [
+                'file' => $file,
+                'class' => $isAnonymous ? 'Anonymous Migration Class' : $className,
+                'message' => 'Would execute migration (pretend mode - no SQL preview available)',
+            ];
+
+            // Callback with pretend info
+            if ($callback) {
+                $callback($file, 'pretend', $info);
+            }
+        } catch (\Throwable $e) {
+            if ($callback) {
+                $callback($file, 'failed', $e);
+            }
+
+            throw $e;
+        }
+    }
+
+    /**
      * Rollback single migration.
      *
      * @param string $path Path to migrations directory
@@ -285,8 +338,16 @@ final class Migrator
             throw new \RuntimeException("Migration file not found: {$filePath}");
         }
 
-        require_once $filePath;
+        // Execute migration file and capture return value
+        // This supports both anonymous classes (Laravel 8+ style) and named classes
+        $migration = require $filePath;
 
+        // Check if file returned an anonymous class instance (Laravel 8+ pattern)
+        if ($migration instanceof Migration) {
+            return $migration;
+        }
+
+        // Fallback to named class resolution (backward compatibility)
         // Extract class name from filename
         // Format: YYYY_MM_DD_HHMMSS_CreateUsersTable.php -> CreateUsersTable
         $className = preg_replace('/^\d{4}_\d{2}_\d{2}_\d{6}_/', '', $file);
@@ -306,7 +367,7 @@ final class Migrator
             }
         }
 
-        throw new \RuntimeException("Migration class not found for file: {$file}");
+        throw new \RuntimeException("Migration class not found for file: {$file}. Use either 'return new class extends Migration' or a named class matching the filename.");
     }
 
     /**
@@ -331,7 +392,9 @@ final class Migrator
                 continue;
             }
 
-            if (str_ends_with($file, '.php')) {
+            // Only accept properly formatted migration files: YYYY_MM_DD_HHMMSS_ClassName.php
+            // This prevents accidentally running non-migration PHP files
+            if (preg_match('/^\d{4}_\d{2}_\d{2}_\d{6}_\w+\.php$/', $file)) {
                 $migrations[] = $file;
             }
         }

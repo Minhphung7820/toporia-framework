@@ -25,7 +25,7 @@ use Toporia\Framework\Database\Migration\Migrator;
  */
 final class MigrateCommand extends Command
 {
-    protected string $signature = 'migrate';
+    protected string $signature = 'migrate {--path= : Custom path to migrations directory} {--pretend : Dump SQL queries without executing}';
     protected string $description = 'Run database migrations';
 
     private const COLOR_RESET = "\033[0m";
@@ -55,13 +55,17 @@ final class MigrateCommand extends Command
             $connection = $connectionProxy->getConnection();
             $migrator = new Migrator($connection);
 
-            // Get migrations path
-            $migrationsPath = $this->getBasePath() . '/database/migrations';
+            // Get migrations path (from option or default)
+            $migrationsPath = $this->option('path')
+                ?: $this->getBasePath() . '/database/migrations';
 
             if (!is_dir($migrationsPath)) {
-                $this->printError('Migrations directory not found!');
+                $this->printError("Migrations directory not found: {$migrationsPath}");
                 return 1;
             }
+
+            // Check pretend mode
+            $pretend = (bool) $this->option('pretend');
 
             // Check for pending migrations
             $status = $migrator->status($migrationsPath);
@@ -73,12 +77,12 @@ final class MigrateCommand extends Command
 
             // Show pending migrations count
             $pendingCount = count($status['pending']);
-            $this->printPendingInfo($pendingCount);
+            $this->printPendingInfo($pendingCount, $pretend);
 
             // Run migrations with progress tracking
-            $ranMigrations = $migrator->run($migrationsPath, function ($file, $status, $error = null) {
-                $this->printMigrationStatus($file, $status, $error);
-            });
+            $ranMigrations = $migrator->run($migrationsPath, function ($file, $status, $errorOrInfo = null) {
+                $this->printMigrationStatus($file, $status, $errorOrInfo);
+            }, $pretend);
 
             // Print summary
             $duration = round((microtime(true) - $startTime) * 1000, 2);
@@ -108,10 +112,11 @@ final class MigrateCommand extends Command
     /**
      * Print pending migrations info.
      */
-    private function printPendingInfo(int $count): void
+    private function printPendingInfo(int $count, bool $pretend = false): void
     {
         echo self::COLOR_WARNING;
-        echo "  ℹ  Pending migrations: " . self::COLOR_BOLD . $count . self::COLOR_RESET . self::COLOR_WARNING . "\n";
+        $mode = $pretend ? ' (PRETEND MODE - NO CHANGES WILL BE MADE)' : '';
+        echo "  ℹ  Pending migrations: " . self::COLOR_BOLD . $count . self::COLOR_RESET . self::COLOR_WARNING . $mode . "\n";
         echo self::COLOR_RESET;
         echo "\n";
     }
@@ -132,14 +137,15 @@ final class MigrateCommand extends Command
     /**
      * Print migration status.
      */
-    private function printMigrationStatus(string $file, string $status, ?\Throwable $error = null): void
+    private function printMigrationStatus(string $file, string $status, $errorOrInfo = null): void
     {
         // Clean filename for display
         $displayName = $this->cleanMigrationName($file);
 
         match ($status) {
             'migrated' => $this->printMigrated($displayName),
-            'failed' => $this->printFailed($displayName, $error),
+            'pretend' => $this->printPretend($displayName, $errorOrInfo),
+            'failed' => $this->printFailed($displayName, $errorOrInfo),
             default => null
         };
     }
@@ -159,9 +165,29 @@ final class MigrateCommand extends Command
     }
 
     /**
+     * Print pretend status.
+     */
+    private function printPretend(string $name, ?array $info = null): void
+    {
+        echo self::COLOR_INFO;
+        echo "  ?  ";
+        echo self::COLOR_RESET;
+        echo self::COLOR_DIM . "Would migrate:  " . self::COLOR_RESET;
+        echo $name;
+        echo self::COLOR_INFO . "  [PRETEND]" . self::COLOR_RESET;
+        echo "\n";
+
+        if ($info && isset($info['class'])) {
+            echo self::COLOR_DIM;
+            echo "     Class: " . $info['class'] . "\n";
+            echo self::COLOR_RESET;
+        }
+    }
+
+    /**
      * Print failed status.
      */
-    private function printFailed(string $name, ?\Throwable $error): void
+    private function printFailed(string $name, $error): void
     {
         echo self::COLOR_ERROR;
         echo "  ✗  ";
@@ -171,7 +197,7 @@ final class MigrateCommand extends Command
         echo self::COLOR_ERROR . "  [FAILED]" . self::COLOR_RESET;
         echo "\n";
 
-        if ($error) {
+        if ($error instanceof \Throwable) {
             echo self::COLOR_DIM;
             echo "     Error: " . $error->getMessage() . "\n";
             echo self::COLOR_RESET;

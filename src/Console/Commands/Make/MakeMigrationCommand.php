@@ -23,7 +23,7 @@ use Toporia\Framework\Console\Command;
  */
 final class MakeMigrationCommand extends Command
 {
-    protected string $signature = 'make:migration {name : The name of the migration} {--create= : The table to be created} {--table= : The table to be modified} {--path= : The location where the migration file should be created}';
+    protected string $signature = 'make:migration {name : The name of the migration} {--create= : The table to be created} {--table= : The table to be modified} {--path= : The location where the migration file should be created} {--anonymous : Create anonymous class migration (Laravel 8+ style)}';
 
     protected string $description = 'Create a new migration file';
 
@@ -38,6 +38,7 @@ final class MakeMigrationCommand extends Command
 
         $table = $this->option('create') ?: $this->option('table');
         $create = (bool) $this->option('create');
+        $anonymous = (bool) $this->option('anonymous');
 
         // Determine table name from migration name if not provided
         if (empty($table)) {
@@ -51,7 +52,13 @@ final class MakeMigrationCommand extends Command
             }
         }
 
-        $stub = $create ? 'migration.stub' : 'migration.update.stub';
+        // Select stub based on anonymous flag and operation type
+        if ($anonymous) {
+            $stub = $create ? 'migration.anonymous.stub' : 'migration.update.anonymous.stub';
+        } else {
+            $stub = $create ? 'migration.stub' : 'migration.update.stub';
+        }
+
         $stubPath = $this->resolveStubPath($stub);
 
         if (!file_exists($stubPath)) {

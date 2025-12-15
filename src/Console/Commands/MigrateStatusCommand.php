@@ -25,7 +25,7 @@ use Toporia\Framework\Database\Migration\Migrator;
  */
 final class MigrateStatusCommand extends Command
 {
-    protected string $signature = 'migrate:status';
+    protected string $signature = 'migrate:status {--path= : Custom path to migrations directory}';
     protected string $description = 'Show migration status';
 
     private const COLOR_RESET = "\033[0m";
@@ -53,11 +53,12 @@ final class MigrateStatusCommand extends Command
             $connection = $this->db->connection();
             $migrator = new Migrator($connection);
 
-            // Get migrations path
-            $migrationsPath = $this->getBasePath() . '/database/migrations';
+            // Get migrations path (from option or default)
+            $migrationsPath = $this->option('path')
+                ?: $this->getBasePath() . '/database/migrations';
 
             if (!is_dir($migrationsPath)) {
-                $this->printError('Migrations directory not found!');
+                $this->printError("Migrations directory not found: {$migrationsPath}");
                 return 1;
             }
 
