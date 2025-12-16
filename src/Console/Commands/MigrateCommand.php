@@ -7,16 +7,18 @@ namespace Toporia\Framework\Console\Commands;
 use Toporia\Framework\Console\Command;
 use Toporia\Framework\Database\DatabaseManager;
 use Toporia\Framework\Database\Migration\Migrator;
+use Toporia\Framework\Foundation\PackageManifest;
 
 /**
  * Class MigrateCommand
  *
  * Run database migrations with batch tracking and rollback support.
+ * Supports migrations from both application and packages.
  *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
- * @version     1.0.0
+ * @version     2.0.0
  * @package     toporia/framework
  * @subpackage  Console\Commands
  * @since       2025-01-10
@@ -25,8 +27,8 @@ use Toporia\Framework\Database\Migration\Migrator;
  */
 final class MigrateCommand extends Command
 {
-    protected string $signature = 'migrate {--path= : Custom path to migrations directory} {--pretend : Dump SQL queries without executing}';
-    protected string $description = 'Run database migrations';
+    protected string $signature = 'migrate {--path= : Custom path to migrations directory} {--pretend : Dump SQL queries without executing} {--no-packages : Skip package migrations}';
+    protected string $description = 'Run database migrations (includes package migrations)';
 
     private const COLOR_RESET = "\033[0m";
     private const COLOR_INFO = "\033[36m";      // Cyan
@@ -55,20 +57,17 @@ final class MigrateCommand extends Command
             $connection = $connectionProxy->getConnection();
             $migrator = new Migrator($connection);
 
-            // Get migrations path (from option or default)
-            $migrationsPath = $this->option('path')
-                ?: $this->getBasePath() . '/database/migrations';
+            // Register migration paths
+            $this->registerMigrationPaths($migrator);
 
-            if (!is_dir($migrationsPath)) {
-                $this->printError("Migrations directory not found: {$migrationsPath}");
-                return 1;
-            }
+            // Get specific path if provided
+            $specificPath = $this->option('path') ?: null;
 
             // Check pretend mode
             $pretend = (bool) $this->option('pretend');
 
             // Check for pending migrations
-            $status = $migrator->status($migrationsPath);
+            $status = $migrator->status($specificPath);
 
             if (empty($status['pending'])) {
                 $this->printNothingToMigrate();
@@ -76,12 +75,12 @@ final class MigrateCommand extends Command
             }
 
             // Show pending migrations count
-            $pendingCount = count($status['pending']);
+            $pendingCount = is_array($status['pending']) ? count($status['pending']) : 0;
             $this->printPendingInfo($pendingCount, $pretend);
 
             // Run migrations with progress tracking
-            $ranMigrations = $migrator->run($migrationsPath, function ($file, $status, $errorOrInfo = null) {
-                $this->printMigrationStatus($file, $status, $errorOrInfo);
+            $ranMigrations = $migrator->run($specificPath, function ($file, $statusType, $errorOrInfo = null) {
+                $this->printMigrationStatus($file, $statusType, $errorOrInfo);
             }, $pretend);
 
             // Print summary
@@ -92,6 +91,61 @@ final class MigrateCommand extends Command
         } catch (\Throwable $e) {
             $this->printException($e);
             return 1;
+        }
+    }
+
+    /**
+     * Register all migration paths (app + packages).
+     *
+     * @param Migrator $migrator
+     * @return void
+     */
+    private function registerMigrationPaths(Migrator $migrator): void
+    {
+        // 1. Register application migrations path (priority)
+        $appMigrationsPath = $this->getBasePath() . '/database/migrations';
+
+        if (is_dir($appMigrationsPath)) {
+            $migrator->path($appMigrationsPath);
+        }
+
+        // 2. Register package migrations if not disabled
+        if (!$this->option('no-packages')) {
+            $this->registerPackageMigrations($migrator);
+        }
+    }
+
+    /**
+     * Register package migrations from manifest.
+     *
+     * @param Migrator $migrator
+     * @return void
+     */
+    private function registerPackageMigrations(Migrator $migrator): void
+    {
+        $basePath = $this->getBasePath();
+
+        $manifest = new PackageManifest(
+            $basePath . '/bootstrap/cache/packages.php',
+            $basePath,
+            $basePath . '/vendor',
+            $basePath . '/packages'
+        );
+
+        $packageMigrations = $manifest->migrations();
+
+        foreach ($packageMigrations as $migrationPath) {
+            $migrator->path($migrationPath);
+        }
+
+        // Show registered paths in verbose mode
+        $allPaths = $migrator->paths();
+        $packageCount = count($allPaths) - 1; // Subtract app migrations
+
+        if ($packageCount > 0) {
+            echo self::COLOR_DIM;
+            echo "  Registered {$packageCount} package migration path(s)\n";
+            echo self::COLOR_RESET;
         }
     }
 
@@ -146,6 +200,7 @@ final class MigrateCommand extends Command
             'migrated' => $this->printMigrated($displayName),
             'pretend' => $this->printPretend($displayName, $errorOrInfo),
             'failed' => $this->printFailed($displayName, $errorOrInfo),
+            'not_found' => $this->printNotFound($displayName),
             default => null
         };
     }
@@ -182,6 +237,12 @@ final class MigrateCommand extends Command
             echo "     Class: " . $info['class'] . "\n";
             echo self::COLOR_RESET;
         }
+
+        if ($info && isset($info['path'])) {
+            echo self::COLOR_DIM;
+            echo "     Path: " . $this->shortenPath($info['path']) . "\n";
+            echo self::COLOR_RESET;
+        }
     }
 
     /**
@@ -202,6 +263,20 @@ final class MigrateCommand extends Command
             echo "     Error: " . $error->getMessage() . "\n";
             echo self::COLOR_RESET;
         }
+    }
+
+    /**
+     * Print not found status.
+     */
+    private function printNotFound(string $name): void
+    {
+        echo self::COLOR_WARNING;
+        echo "  !  ";
+        echo self::COLOR_RESET;
+        echo self::COLOR_DIM . "Not found:  " . self::COLOR_RESET;
+        echo $name;
+        echo self::COLOR_WARNING . "  [SKIPPED]" . self::COLOR_RESET;
+        echo "\n";
     }
 
     /**
@@ -279,6 +354,23 @@ final class MigrateCommand extends Command
         // Remove timestamp prefix (YYYY_MM_DD_HHMMSS_)
         $name = preg_replace('/^\d{4}_\d{2}_\d{2}_\d{6}_/', '', $name);
 
-        return $name;
+        return $name ?? $file;
+    }
+
+    /**
+     * Shorten path for display.
+     *
+     * @param string $path
+     * @return string
+     */
+    private function shortenPath(string $path): string
+    {
+        $basePath = $this->getBasePath();
+
+        if (str_starts_with($path, $basePath)) {
+            return substr($path, strlen($basePath) + 1);
+        }
+
+        return $path;
     }
 }

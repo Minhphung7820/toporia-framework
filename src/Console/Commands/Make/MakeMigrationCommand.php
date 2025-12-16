@@ -196,12 +196,4 @@ final class MakeMigrationCommand extends Command
 
         return $stubPath;
     }
-
-    /**
-     * Get base path of the application.
-     */
-    private function getBasePath(): string
-    {
-        return getcwd() ?: dirname(__DIR__, 5);
-    }
 }

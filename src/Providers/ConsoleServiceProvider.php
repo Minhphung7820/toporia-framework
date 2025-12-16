@@ -195,6 +195,9 @@ final class ConsoleServiceProvider extends ServiceProvider
       'make:repository' => \Toporia\Framework\Console\Commands\Make\MakeRepositoryCommand::class,
       'make:observer' => \Toporia\Framework\Console\Commands\Make\MakeObserverCommand::class,
 
+      // Package discovery commands
+      'package:discover' => \Toporia\Framework\Console\Commands\PackageDiscoverCommand::class,
+
       // App commands
       'about' => \Toporia\Framework\Console\Commands\App\AboutCommand::class,
       'env' => \Toporia\Framework\Console\Commands\App\EnvCommand::class,

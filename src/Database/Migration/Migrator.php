@@ -14,6 +14,7 @@ use Toporia\Framework\Database\Schema\SchemaBuilder;
  *
  * Features:
  * - Batch tracking (only run new migrations)
+ * - Multiple migration paths support (app + packages)
  * - Rollback support
  * - Status reporting
  * - Transaction support for safety
@@ -31,7 +32,7 @@ use Toporia\Framework\Database\Schema\SchemaBuilder;
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
  * @license     MIT
- * @version     1.0.0
+ * @version     2.0.0
  * @package     toporia/framework
  * @subpackage  Database\Migration
  * @since       2025-01-10
@@ -44,6 +45,20 @@ final class Migrator
     private SchemaBuilder $schema;
 
     /**
+     * Additional migration paths (from packages).
+     *
+     * @var array<string>
+     */
+    private array $paths = [];
+
+    /**
+     * Mapping of migration filename to its source path.
+     *
+     * @var array<string, string>
+     */
+    private array $migrationPathMap = [];
+
+    /**
      * @param ConnectionInterface $connection Database connection
      */
     public function __construct(
@@ -54,34 +69,64 @@ final class Migrator
     }
 
     /**
-     * Run pending migrations.
+     * Register an additional migration path.
+     *
+     * Used by ServiceProviders to register package migrations.
      *
      * @param string $path Path to migrations directory
+     * @return void
+     */
+    public function path(string $path): void
+    {
+        $path = rtrim($path, '/\\');
+
+        if (!in_array($path, $this->paths, true) && is_dir($path)) {
+            $this->paths[] = $path;
+        }
+    }
+
+    /**
+     * Get all registered migration paths.
+     *
+     * @return array<string>
+     */
+    public function paths(): array
+    {
+        return $this->paths;
+    }
+
+    /**
+     * Run pending migrations from all paths.
+     *
+     * @param string|null $path Specific path (null = all paths)
      * @param callable|null $callback Progress callback (migration name, status)
      * @param bool $pretend If true, dump SQL without executing
      * @return array Ran migrations
      */
-    public function run(string $path, ?callable $callback = null, bool $pretend = false): array
+    public function run(?string $path = null, ?callable $callback = null, bool $pretend = false): array
     {
         // Ensure repository exists (not needed in pretend mode)
         if (!$pretend) {
             $this->ensureRepositoryExists();
         }
 
-        // Get pending migrations
-        $files = $this->getMigrationFiles($path);
+        // Get pending migrations from specified path or all paths
+        $allFiles = $this->getMigrationFilesFromPaths($path);
 
         if (!$pretend) {
             $ran = $this->repository->getRan();
-            $pending = array_diff($files, $ran);
+            $pending = array_diff(array_keys($allFiles), $ran);
         } else {
             // In pretend mode, show all migrations (can't check database)
-            $pending = $files;
+            $pending = array_keys($allFiles);
         }
 
         if (empty($pending)) {
             return [];
         }
+
+        // Sort pending migrations chronologically
+        sort($pending);
 
         // Get next batch number
         $batch = $pretend ? 0 : $this->repository->getNextBatchNumber();
@@ -90,10 +135,12 @@ final class Migrator
         $ranMigrations = [];
 
         foreach ($pending as $file) {
+            $migrationPath = $allFiles[$file];
+
             if ($pretend) {
-                $this->pretendMigration($path, $file, $callback);
+                $this->pretendMigration($migrationPath, $file, $callback);
             } else {
-                $this->runMigration($path, $file, $batch, $callback);
+                $this->runMigration($migrationPath, $file, $batch, $callback);
             }
             $ranMigrations[] = $file;
         }
@@ -104,11 +151,11 @@ final class Migrator
     /**
      * Rollback last batch of migrations.
      *
-     * @param string $path Path to migrations directory
+     * @param string|null $path Specific path (null = all paths)
      * @param callable|null $callback Progress callback
      * @return array Rolled back migrations
      */
-    public function rollback(string $path, ?callable $callback = null): array
+    public function rollback(?string $path = null, ?callable $callback = null): array
     {
         if (!$this->repository->repositoryExists()) {
             return [];
@@ -121,11 +168,25 @@ final class Migrator
             return [];
         }
 
+        // Build path map for all paths
+        $allFiles = $this->getMigrationFilesFromPaths($path);
+
         // Rollback migrations
         $rolledBack = [];
 
         foreach ($migrations as $file) {
-            $this->rollbackMigration($path, $file, $callback);
+            // Find the path for this migration
+            $migrationPath = $allFiles[$file] ?? null;
+
+            if ($migrationPath === null) {
+                // Migration file not found in any path, skip but warn
+                if ($callback) {
+                    $callback($file, 'not_found');
+                }
+                continue;
+            }
+
+            $this->rollbackMigration($migrationPath, $file, $callback);
             $rolledBack[] = $file;
         }
 
@@ -135,36 +196,49 @@ final class Migrator
     /**
      * Reset all migrations.
      *
-     * @param string $path Path to migrations directory
+     * @param string|null $path Specific path (null = all paths)
      * @param callable|null $callback Progress callback
      * @return array All migrations
      */
-    public function reset(string $path, ?callable $callback = null): array
+    public function reset(?string $path = null, ?callable $callback = null): array
     {
         if (!$this->repository->repositoryExists()) {
             return [];
         }
 
+        // Build path map for all paths
+        $allFiles = $this->getMigrationFilesFromPaths($path);
+
         $migrations = array_reverse($this->repository->getRan());
-        $reset = [];
+        $resetMigrations = [];
 
         foreach ($migrations as $file) {
-            $this->rollbackMigration($path, $file, $callback);
-            $reset[] = $file;
+            $migrationPath = $allFiles[$file] ?? null;
+
+            if ($migrationPath === null) {
+                if ($callback) {
+                    $callback($file, 'not_found');
+                }
+                continue;
+            }
+
+            $this->rollbackMigration($migrationPath, $file, $callback);
+            $resetMigrations[] = $file;
         }
 
-        return $reset;
+        return $resetMigrations;
     }
 
     /**
-     * Get migration status.
+     * Get migration status from all paths.
      *
-     * @param string $path Path to migrations directory
+     * @param string|null $path Specific path (null = all paths)
      * @return array Status array with 'ran' and 'pending' keys
      */
-    public function status(string $path): array
+    public function status(?string $path = null): array
     {
-        $files = $this->getMigrationFiles($path);
+        $allFiles = $this->getMigrationFilesFromPaths($path);
+        $files = array_keys($allFiles);
 
         if (!$this->repository->repositoryExists()) {
             return [
@@ -182,9 +256,13 @@ final class Migrator
                 $ran[] = [
                     'migration' => $file,
                     'batch' => $batches[$file],
+                    'path' => $allFiles[$file],
                 ];
             } else {
-                $pending[] = $file;
+                $pending[] = [
+                    'migration' => $file,
+                    'path' => $allFiles[$file],
+                ];
             }
         }
 
@@ -192,6 +270,43 @@ final class Migrator
             'ran' => $ran,
             'pending' => $pending,
         ];
+    }
+
+    /**
+     * Get migration files from all registered paths.
+     *
+     * Returns a map of filename => source path for locating migrations.
+     *
+     * @param string|null $specificPath If provided, only scan this path
+     * @return array<string, string> Filename => source directory path
+     */
+    private function getMigrationFilesFromPaths(?string $specificPath = null): array
+    {
+        $allFiles = [];
+
+        if ($specificPath !== null) {
+            // Only scan specific path
+            $files = $this->getMigrationFiles($specificPath);
+            foreach ($files as $file) {
+                $allFiles[$file] = $specificPath;
+            }
+        } else {
+            // Scan all registered paths
+            foreach ($this->paths as $migrationPath) {
+                $files = $this->getMigrationFiles($migrationPath);
+                foreach ($files as $file) {
+                    // First registered path wins (app migrations take priority)
+                    if (!isset($allFiles[$file])) {
+                        $allFiles[$file] = $migrationPath;
+                    }
+                }
+            }
+        }
+
+        // Sort by filename (chronological order)
+        ksort($allFiles);
+
+        return $allFiles;
     }
 
     /**
@@ -262,6 +377,7 @@ final class Migrator
 
             $info = [
                 'file' => $file,
+                'path' => $path,
                 'class' => $isAnonymous ? 'Anonymous Migration Class' : $className,
                 'message' => 'Would execute migration (pretend mode - no SQL preview available)',
             ];
@@ -371,12 +487,12 @@ final class Migrator
     }
 
     /**
-     * Get all migration files.
+     * Get all migration files from a single directory.
      *
      * Performance: O(N) where N = number of files
      *
      * @param string $path Path to migrations directory
-     * @return array Sorted array of migration filenames
+     * @return array<string> Sorted array of migration filenames
      */
     private function getMigrationFiles(string $path): array
     {
@@ -385,6 +501,11 @@ final class Migrator
         }
 
         $files = scandir($path);
+
+        if ($files === false) {
+            return [];
+        }
+
         $migrations = [];
 
         foreach ($files as $file) {
@@ -425,5 +546,32 @@ final class Migrator
     public function getRepository(): MigrationRepository
     {
         return $this->repository;
+    }
+
+    /**
+     * Check if any migrations have been run.
+     *
+     * @return bool
+     */
+    public function hasRunMigrations(): bool
+    {
+        if (!$this->repository->repositoryExists()) {
+            return false;
+        }
+
+        return count($this->repository->getRan()) > 0;
+    }
+
+    /**
+     * Get count of pending migrations.
+     *
+     * @param string|null $path Specific path (null = all paths)
+     * @return int
+     */
+    public function pendingCount(?string $path = null): int
+    {
+        $status = $this->status($path);
+
+        return count($status['pending']);
     }
 }
