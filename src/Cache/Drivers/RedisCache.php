@@ -155,15 +155,31 @@ final class RedisCache implements CacheInterface
 
     public function clear(): bool
     {
-        // Clear all keys with the prefix
+        // CRITICAL: Use SCAN instead of KEYS to avoid blocking Redis in production
+        // KEYS command is O(N) and blocks the entire Redis server
+        // SCAN is O(1) per call and doesn't block
         $pattern = $this->prefixKey('*');
-        $keys = $this->redis->keys($pattern);
+        $iterator = null;
+        $deletedCount = 0;
 
-        if (empty($keys)) {
-            return true;
-        }
+        do {
+            // SCAN returns [iterator, keys]
+            // iterator = 0 means iteration is complete
+            $result = $this->redis->scan($iterator, $pattern, 100);
 
-        return $this->redis->del($keys) > 0;
+            if ($result === false) {
+                break;
+            }
+
+            // $result is array of keys (phpredis returns keys directly, not [iterator, keys])
+            // For phpredis extension, scan() modifies $iterator by reference
+            if (!empty($result)) {
+                $deleted = $this->redis->del($result);
+                $deletedCount += $deleted;
+            }
+        } while ($iterator > 0);
+
+        return true; // Always return true even if no keys deleted (consistent with other drivers)
     }
 
     public function getMultiple(array $keys, mixed $default = null): array

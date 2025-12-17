@@ -66,7 +66,19 @@ final class MemoryCache implements CacheInterface
 
     public function has(string $key): bool
     {
-        return $this->get($key) !== null;
+        if (!isset($this->storage[$key])) {
+            return false;
+        }
+
+        $data = $this->storage[$key];
+
+        // Check if expired
+        if ($data['expires_at'] !== null && $data['expires_at'] < now()->getTimestamp()) {
+            unset($this->storage[$key]);
+            return false;
+        }
+
+        return true;
     }
 
     public function delete(string $key): bool

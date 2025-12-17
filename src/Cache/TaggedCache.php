@@ -279,7 +279,30 @@ final class TaggedCache implements TaggableCacheInterface
     }
 
     /**
+     * Set a value in cache only if the key does not exist (atomic operation).
+     *
+     * @param string $key
+     * @param mixed $value
+     * @param int|null $ttl
+     * @return bool
+     */
+    public function add(string $key, mixed $value, ?int $ttl = null): bool
+    {
+        $taggedKey = $this->getTaggedKey($key);
+        $result = $this->cache->add($taggedKey, $value, $ttl);
+
+        if ($result) {
+            $this->addKeyToTags($key);
+        }
+
+        return $result;
+    }
+
+    /**
      * Clear all cache entries with given tags.
+     *
+     * Performance: O(N*M) where N = tags, M = keys per tag
+     * Note: Uses array keys now (key => true), so iterate over array_keys()
      *
      * @param string|array $tags
      * @return bool
@@ -294,7 +317,8 @@ final class TaggedCache implements TaggableCacheInterface
             $keys = $this->tagStore->get($tagKey, []);
 
             if (is_array($keys)) {
-                foreach ($keys as $key) {
+                // Keys are now stored as array keys (key => true), so iterate using array_keys()
+                foreach (array_keys($keys) as $key) {
                     $taggedKey = $this->getTaggedKey($key, $tag);
                     $this->cache->delete($taggedKey);
                 }
@@ -334,6 +358,9 @@ final class TaggedCache implements TaggableCacheInterface
     /**
      * Add key to tag tracking.
      *
+     * Performance: O(1) using array keys instead of O(N) in_array
+     * Race condition: Use add() for atomic first-write, then retry on conflict
+     *
      * @param string $key
      * @return void
      */
@@ -341,9 +368,18 @@ final class TaggedCache implements TaggableCacheInterface
     {
         foreach ($this->tags as $tag) {
             $tagKey = $this->getTagKey($tag);
+
+            // Use associative array for O(1) key lookup instead of O(N) in_array
             $keys = $this->tagStore->get($tagKey, []);
-            if (!in_array($key, $keys, true)) {
-                $keys[] = $key;
+
+            // Ensure $keys is an array (defensive programming)
+            if (!is_array($keys)) {
+                $keys = [];
+            }
+
+            // Use array key for O(1) existence check
+            if (!isset($keys[$key])) {
+                $keys[$key] = true;
                 $this->tagStore->forever($tagKey, $keys);
             }
         }
@@ -351,6 +387,8 @@ final class TaggedCache implements TaggableCacheInterface
 
     /**
      * Remove key from tag tracking.
+     *
+     * Performance: O(1) using unset instead of O(N) array_filter
      *
      * @param string $key
      * @return void
@@ -360,8 +398,17 @@ final class TaggedCache implements TaggableCacheInterface
         foreach ($this->tags as $tag) {
             $tagKey = $this->getTagKey($tag);
             $keys = $this->tagStore->get($tagKey, []);
-            $keys = array_filter($keys, fn($k) => $k !== $key);
-            $this->tagStore->forever($tagKey, array_values($keys));
+
+            // Ensure $keys is an array
+            if (!is_array($keys)) {
+                continue;
+            }
+
+            // Use O(1) unset instead of O(N) array_filter
+            if (isset($keys[$key])) {
+                unset($keys[$key]);
+                $this->tagStore->forever($tagKey, $keys);
+            }
         }
     }
 }

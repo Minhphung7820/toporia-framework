@@ -56,7 +56,14 @@ final class FileCache implements CacheInterface
         }
 
         // SECURITY: Restrict unserialize to prevent PHP Object Injection attacks
-        $data = unserialize(file_get_contents($file), ['allowed_classes' => false]);
+        $data = @unserialize(file_get_contents($file), ['allowed_classes' => false]);
+
+        // Handle corrupted data
+        if ($data === false || !is_array($data) || !array_key_exists('value', $data)) {
+            // Corrupted data - delete file and return default
+            @unlink($file);
+            return $default;
+        }
 
         // Check if expired
         if ($data['expires_at'] !== null && $data['expires_at'] < now()->getTimestamp()) {
@@ -83,7 +90,26 @@ final class FileCache implements CacheInterface
 
     public function has(string $key): bool
     {
-        return $this->get($key) !== null;
+        $file = $this->getFilePath($key);
+
+        if (!file_exists($file)) {
+            return false;
+        }
+
+        // SECURITY: Restrict unserialize to prevent PHP Object Injection attacks
+        $data = @unserialize(file_get_contents($file), ['allowed_classes' => false]);
+
+        if ($data === false) {
+            return false;
+        }
+
+        // Check if expired
+        if ($data['expires_at'] !== null && $data['expires_at'] < now()->getTimestamp()) {
+            $this->delete($key);
+            return false;
+        }
+
+        return true;
     }
 
     public function delete(string $key): bool
