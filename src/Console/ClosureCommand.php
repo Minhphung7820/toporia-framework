@@ -65,7 +65,7 @@ final class ClosureCommand extends Command
     }
 
     /**
-     * Set command description
+     * Set command description (fluent API)
      *
      * @param string $description
      * @return self
@@ -74,6 +74,17 @@ final class ClosureCommand extends Command
     {
         $this->description = $description;
         return $this;
+    }
+
+    /**
+     * Set command description (direct setter)
+     *
+     * @param string $description
+     * @return void
+     */
+    public function setDescription(string $description): void
+    {
+        $this->description = $description;
     }
 
     /**

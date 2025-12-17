@@ -271,17 +271,21 @@ final class ConsoleServiceProvider extends ServiceProvider
     }
 
     // Load the terminal routes file
-    // This file will call Terminal::command() which registers commands
+    // This file will call Terminal::command() which registers METADATA only (not instances)
     require $terminalFile;
 
-    // Get all registered closure commands
+    // Get all registered command metadata
     $registrar = $container->get(TerminalCommandRegistrar::class);
-    $closureCommands = $registrar->getCommandMap();
+    $commandMetadata = $registrar->getCommandMap();
 
-    // Register each closure command as if it were a class
-    // We use the actual ClosureCommand instances instead of class names
-    foreach ($closureCommands as $name => $command) {
-      $loader->register($name, get_class($command), fn() => $command);
+    // Register each terminal command with LAZY factory
+    // Commands are instantiated ONLY when executed (not at boot time)
+    foreach ($commandMetadata as $name => $metadata) {
+      $loader->register(
+        $name,
+        \Toporia\Framework\Console\ClosureCommand::class,
+        fn() => $registrar->createCommand($name) // Lazy factory
+      );
     }
   }
 

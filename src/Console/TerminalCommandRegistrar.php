@@ -27,11 +27,11 @@ use Toporia\Framework\Container\Contracts\ContainerInterface;
 final class TerminalCommandRegistrar
 {
     /**
-     * Registered closure commands
+     * Command metadata for lazy loading
      *
-     * @var array<string, ClosureCommand>
+     * @var array<string, array{signature: string, callback: Closure, description: string}>
      */
-    private array $commands = [];
+    private array $commandMetadata = [];
 
     /**
      * Constructor
@@ -44,44 +44,92 @@ final class TerminalCommandRegistrar
     }
 
     /**
-     * Register a closure-based command
+     * Register a closure-based command (LAZY - stores metadata only)
+     *
+     * Returns a fluent builder for chaining ->describe()
      *
      * @param string $signature Command signature (e.g., "mail:send {user} {--queue=}")
      * @param Closure $callback The closure to execute
-     * @return ClosureCommand
+     * @return TerminalCommandBuilder Fluent builder for method chaining
      */
-    public function command(string $signature, Closure $callback): ClosureCommand
+    public function command(string $signature, Closure $callback): TerminalCommandBuilder
     {
-        $command = new ClosureCommand($signature, $callback, $this->container);
-
         // Extract command name from signature
         $name = explode(' ', $signature)[0];
 
-        // Store for later registration
-        $this->commands[$name] = $command;
+        // Store metadata only (no instantiation yet)
+        $this->commandMetadata[$name] = [
+            'signature' => $signature,
+            'callback' => $callback,
+            'description' => '', // Will be set via describe()
+        ];
 
-        return $command;
+        // Return builder for fluent API
+        return new TerminalCommandBuilder($this, $name);
     }
 
     /**
-     * Get all registered closure commands
+     * Set command description (called by builder)
      *
-     * @return array<string, ClosureCommand>
+     * @param string $name Command name
+     * @param string $description
+     * @return void
+     * @internal
      */
-    public function getCommands(): array
+    public function setDescription(string $name, string $description): void
     {
-        return $this->commands;
+        if (isset($this->commandMetadata[$name])) {
+            $this->commandMetadata[$name]['description'] = $description;
+        }
     }
 
     /**
-     * Get command by name
+     * Get command metadata
      *
      * @param string $name
+     * @return array{signature: string, callback: Closure, description: string}|null
+     */
+    public function getMetadata(string $name): ?array
+    {
+        return $this->commandMetadata[$name] ?? null;
+    }
+
+    /**
+     * Get all command metadata
+     *
+     * @return array<string, array{signature: string, callback: Closure, description: string}>
+     */
+    public function getAllMetadata(): array
+    {
+        return $this->commandMetadata;
+    }
+
+    /**
+     * Create ClosureCommand instance from metadata (LAZY instantiation)
+     *
+     * @param string $name Command name
      * @return ClosureCommand|null
      */
-    public function getCommand(string $name): ?ClosureCommand
+    public function createCommand(string $name): ?ClosureCommand
     {
-        return $this->commands[$name] ?? null;
+        $metadata = $this->commandMetadata[$name] ?? null;
+
+        if ($metadata === null) {
+            return null;
+        }
+
+        $command = new ClosureCommand(
+            $metadata['signature'],
+            $metadata['callback'],
+            $this->container
+        );
+
+        // Set description if provided
+        if ($metadata['description'] !== '') {
+            $command->setDescription($metadata['description']);
+        }
+
+        return $command;
     }
 
     /**
@@ -92,19 +140,18 @@ final class TerminalCommandRegistrar
      */
     public function hasCommand(string $name): bool
     {
-        return isset($this->commands[$name]);
+        return isset($this->commandMetadata[$name]);
     }
 
     /**
      * Get command map for LazyCommandLoader
      *
-     * Returns array in format: [commandName => commandClass]
-     * Since ClosureCommand instances are already created, we return them directly.
+     * Returns metadata for lazy loading instead of eager instances.
      *
-     * @return array<string, ClosureCommand>
+     * @return array<string, array{signature: string, callback: Closure, description: string}>
      */
     public function getCommandMap(): array
     {
-        return $this->commands;
+        return $this->commandMetadata;
     }
 }
