@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Toporia\Framework\Foundation;
 
+use Toporia\Framework\Log\Contracts\LoggerInterface;
+
 /**
  * Class PackageManifest
  *
@@ -43,12 +45,14 @@ final class PackageManifest
      * @param string $basePath Application base path
      * @param string $vendorPath Path to vendor directory
      * @param string $packagesPath Path to local packages directory
+     * @param LoggerInterface|null $logger Optional logger for error reporting
      */
     public function __construct(
         private readonly string $manifestPath,
         private readonly string $basePath,
         private readonly string $vendorPath,
-        private readonly string $packagesPath
+        private readonly string $packagesPath,
+        private readonly ?LoggerInterface $logger = null
     ) {}
 
     /**
@@ -73,21 +77,31 @@ final class PackageManifest
     /**
      * Get all discovered configuration files.
      *
-     * @return array<string, string> Config key => config file path
+     * Resolves relative paths to absolute paths at runtime.
+     *
+     * @return array<string, string> Config key => absolute config file path
      */
     public function config(): array
     {
-        return $this->getManifest()['config'] ?? [];
+        $configs = $this->getManifest()['config'] ?? [];
+
+        // Resolve relative paths to absolute
+        return array_map(fn($path) => $this->resolveAbsolutePath($path), $configs);
     }
 
     /**
      * Get all discovered migration paths.
      *
-     * @return array<string> Migration directory paths
+     * Resolves relative paths to absolute paths at runtime.
+     *
+     * @return array<string> Absolute migration directory paths
      */
     public function migrations(): array
     {
-        return $this->getManifest()['migrations'] ?? [];
+        $migrations = $this->getManifest()['migrations'] ?? [];
+
+        // Resolve relative paths to absolute
+        return array_map(fn($path) => $this->resolveAbsolutePath($path), $migrations);
     }
 
     /**
@@ -98,6 +112,112 @@ final class PackageManifest
     public function aliases(): array
     {
         return $this->getManifest()['aliases'] ?? [];
+    }
+
+    /**
+     * Get all discovered route files from packages.
+     *
+     * Returns route configurations organized by package, including:
+     * - Route file paths (resolved to absolute)
+     * - Middleware groups to apply
+     * - Route prefix
+     * - Route namespace
+     *
+     * @return array<string, array<string, mixed>> Package name => route config
+     */
+    public function routes(): array
+    {
+        $routes = $this->getManifest()['routes'] ?? [];
+
+        // Resolve 'path' in each route config to absolute path
+        return array_map(function ($packageRoutes) {
+            return array_map(function ($routeConfig) {
+                if (isset($routeConfig['path'])) {
+                    $routeConfig['path'] = $this->resolveAbsolutePath($routeConfig['path']);
+                }
+                return $routeConfig;
+            }, $packageRoutes);
+        }, $routes);
+    }
+
+    /**
+     * Get all discovered view paths and namespaces from packages.
+     *
+     * Returns view configurations organized by package, including:
+     * - View directory paths (for global view search) - resolved to absolute
+     * - View namespaces (for package::view syntax) - resolved to absolute
+     *
+     * Format:
+     * [
+     *     'package-name' => [
+     *         'paths' => ['/absolute/path/to/views'],
+     *         'namespaces' => ['pkg' => '/absolute/path/to/views']
+     *     ]
+     * ]
+     *
+     * @return array<string, array<string, mixed>> Package name => view config
+     */
+    public function views(): array
+    {
+        $views = $this->getManifest()['views'] ?? [];
+
+        // Resolve paths and namespaces to absolute
+        return array_map(function ($viewConfig) {
+            if (isset($viewConfig['paths'])) {
+                $viewConfig['paths'] = array_map(fn($path) => $this->resolveAbsolutePath($path), $viewConfig['paths']);
+            }
+            if (isset($viewConfig['namespaces'])) {
+                $viewConfig['namespaces'] = array_map(fn($path) => $this->resolveAbsolutePath($path), $viewConfig['namespaces']);
+            }
+            return $viewConfig;
+        }, $views);
+    }
+
+    /**
+     * Get all discovered middleware from packages.
+     *
+     * @return array<string, array<string, mixed>> Middleware groups and aliases
+     */
+    public function middleware(): array
+    {
+        return $this->getManifest()['middleware'] ?? [];
+    }
+
+    /**
+     * Get all discovered commands from packages.
+     *
+     * @return array<string> Command class names
+     */
+    public function commands(): array
+    {
+        return $this->getManifest()['commands'] ?? [];
+    }
+
+    /**
+     * Get all discovered event listeners from packages.
+     *
+     * @return array<string, array<string>> Event => [Listener classes]
+     */
+    public function events(): array
+    {
+        return $this->getManifest()['events'] ?? [];
+    }
+
+    /**
+     * Get all discovered translations from packages.
+     *
+     * Resolves relative paths to absolute paths at runtime.
+     *
+     * @return array<string, array<string, string>> Package => [Locale => Path]
+     */
+    public function translations(): array
+    {
+        $translations = $this->getManifest()['translations'] ?? [];
+
+        // Resolve relative paths to absolute
+        return array_map(function ($packageTranslations) {
+            return array_map(fn($path) => $this->resolveAbsolutePath($path), $packageTranslations);
+        }, $translations);
     }
 
     /**
@@ -137,8 +257,10 @@ final class PackageManifest
     public function build(): void
     {
         $discovery = new PackageDiscovery(
+            $this->basePath,
             $this->vendorPath,
-            $this->packagesPath
+            $this->packagesPath,
+            $this->logger
         );
 
         $packages = $discovery->discover();
@@ -176,6 +298,68 @@ final class PackageManifest
             if (isset($packageConfig['aliases']) && is_array($packageConfig['aliases'])) {
                 foreach ($packageConfig['aliases'] as $alias => $class) {
                     $manifest['aliases'][$alias] = $class;
+                }
+            }
+
+            // Routes
+            if (isset($packageConfig['routes']) && is_array($packageConfig['routes'])) {
+                $manifest['routes'][$packageName] = $packageConfig['routes'];
+            }
+
+            // Middleware
+            if (isset($packageConfig['middleware']) && is_array($packageConfig['middleware'])) {
+                // Merge middleware groups
+                if (isset($packageConfig['middleware']['groups'])) {
+                    foreach ($packageConfig['middleware']['groups'] as $groupName => $middlewareList) {
+                        if (!isset($manifest['middleware']['groups'][$groupName])) {
+                            $manifest['middleware']['groups'][$groupName] = [];
+                        }
+                        $manifest['middleware']['groups'][$groupName] = array_merge(
+                            $manifest['middleware']['groups'][$groupName],
+                            $middlewareList
+                        );
+                    }
+                }
+
+                // Merge middleware aliases
+                if (isset($packageConfig['middleware']['aliases'])) {
+                    foreach ($packageConfig['middleware']['aliases'] as $alias => $class) {
+                        $manifest['middleware']['aliases'][$alias] = $class;
+                    }
+                }
+            }
+
+            // Commands - Merge as associative array (name => class)
+            if (isset($packageConfig['commands']) && is_array($packageConfig['commands'])) {
+                // Commands should be already mapped as ['command:name' => 'Class'] from PackageDiscovery
+                foreach ($packageConfig['commands'] as $commandName => $commandClass) {
+                    // Only add if not already exists (prevent duplicates)
+                    if (!isset($manifest['commands'][$commandName])) {
+                        $manifest['commands'][$commandName] = $commandClass;
+                    }
+                }
+            }
+
+            // Event Listeners - Merge as event => [listeners]
+            if (isset($packageConfig['events']) && is_array($packageConfig['events'])) {
+                foreach ($packageConfig['events'] as $event => $listeners) {
+                    if (!isset($manifest['events'][$event])) {
+                        $manifest['events'][$event] = [];
+                    }
+                    $manifest['events'][$event] = array_merge(
+                        $manifest['events'][$event],
+                        $listeners
+                    );
+                }
+            }
+
+            // Translations - Merge as locale => path
+            if (isset($packageConfig['translations']) && is_array($packageConfig['translations'])) {
+                foreach ($packageConfig['translations'] as $locale => $translationPath) {
+                    if (!isset($manifest['translations'][$packageName])) {
+                        $manifest['translations'][$packageName] = [];
+                    }
+                    $manifest['translations'][$packageName][$locale] = $translationPath;
                 }
             }
         }
@@ -305,6 +489,14 @@ final class PackageManifest
             'config' => [],
             'migrations' => [],
             'aliases' => [],
+            'routes' => [],
+            'middleware' => [
+                'groups' => [],
+                'aliases' => [],
+            ],
+            'commands' => [],
+            'events' => [],
+            'translations' => [],
         ];
     }
 
@@ -334,5 +526,25 @@ final class PackageManifest
     public function getManifestPath(): string
     {
         return $this->manifestPath;
+    }
+
+    /**
+     * Resolve relative path to absolute path at runtime.
+     *
+     * This allows manifest to store relative paths, making it portable across environments
+     * (HOST vs Docker containers with different mount points).
+     *
+     * @param string $path Relative or absolute path
+     * @return string Absolute path
+     */
+    private function resolveAbsolutePath(string $path): string
+    {
+        // Already absolute path
+        if ($path[0] === '/') {
+            return $path;
+        }
+
+        // Relative path - prepend base path
+        return $this->basePath . '/' . $path;
     }
 }

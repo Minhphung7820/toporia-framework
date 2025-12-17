@@ -161,11 +161,13 @@ final class VendorPublishCommand extends Command
     {
         $basePath = $this->getBasePath();
 
+        // Logger not available in standalone commands
         $manifest = new PackageManifest(
             $basePath . '/bootstrap/cache/packages.php',
             $basePath,
             $basePath . '/vendor',
-            $basePath . '/packages'
+            $basePath . '/packages',
+            null
         );
 
         $configs = $manifest->config();

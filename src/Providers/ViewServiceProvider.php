@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Toporia\Framework\Providers;
 
 use Toporia\Framework\Container\Contracts\ContainerInterface;
+use Toporia\Framework\Foundation\Application;
+use Toporia\Framework\Foundation\PackageManifest;
 use Toporia\Framework\Foundation\ServiceProvider;
 use Toporia\Framework\View\ViewFactory;
 use Toporia\Framework\View\View;
@@ -68,6 +70,9 @@ final class ViewServiceProvider extends ServiceProvider
         /** @var ViewFactory $viewFactory */
         $viewFactory = $container->get('view');
 
+        // Load package views from manifest
+        $this->loadPackageViews($container, $viewFactory);
+
         // Share app config if available
         if ($container->has('config')) {
             $viewFactory->share('config', $container->get('config'));
@@ -79,6 +84,51 @@ final class ViewServiceProvider extends ServiceProvider
                 $auth = $container->get('auth');
                 $view->with('currentUser', $auth->user());
             });
+        }
+    }
+
+    /**
+     * Load package view paths and namespaces from manifest.
+     *
+     * @param ContainerInterface $container
+     * @param ViewFactory $viewFactory
+     * @return void
+     */
+    private function loadPackageViews(ContainerInterface $container, ViewFactory $viewFactory): void
+    {
+        if (!$container->has(Application::class)) {
+            return;
+        }
+
+        // Get package manifest singleton (performance: reuse across all providers)
+        $manifest = $container->get(PackageManifest::class);
+
+        // Get all package views
+        $packageViews = $manifest->views();
+
+        if (empty($packageViews)) {
+            return;
+        }
+
+        // Load each package's views
+        foreach ($packageViews as $packageName => $viewConfig) {
+            // Add view paths
+            if (isset($viewConfig['paths']) && is_array($viewConfig['paths'])) {
+                foreach ($viewConfig['paths'] as $path) {
+                    if (is_dir($path)) {
+                        $viewFactory->addLocation($path);
+                    }
+                }
+            }
+
+            // Register view namespaces
+            if (isset($viewConfig['namespaces']) && is_array($viewConfig['namespaces'])) {
+                foreach ($viewConfig['namespaces'] as $namespace => $path) {
+                    if (is_dir($path)) {
+                        $viewFactory->addNamespace($namespace, $path);
+                    }
+                }
+            }
         }
     }
 

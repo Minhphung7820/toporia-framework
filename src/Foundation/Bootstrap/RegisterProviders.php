@@ -95,11 +95,14 @@ final class RegisterProviders
     {
         $basePath = $app->getBasePath();
 
+        // Logger is not available yet during provider registration,
+        // so pass null (logging will be disabled during discovery)
         $manifest = new PackageManifest(
             $basePath . '/bootstrap/cache/packages.php',
             $basePath,
             $basePath . '/vendor',
-            $basePath . '/packages'
+            $basePath . '/packages',
+            null  // No logger available during early bootstrap
         );
 
         return $manifest->providers();

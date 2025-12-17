@@ -6,6 +6,7 @@ namespace Toporia\Framework\Providers;
 
 use Toporia\Framework\Container\Contracts\ContainerInterface;
 use Toporia\Framework\Foundation\ServiceProvider;
+use Toporia\Framework\Foundation\PackageManifest;
 use Toporia\Framework\Console\Application;
 use Toporia\Framework\Console\LazyCommandLoader;
 use Toporia\Framework\Console\CommandDiscovery;
@@ -81,6 +82,9 @@ final class ConsoleServiceProvider extends ServiceProvider
 
     // STEP 4: Auto-discover commands (if enabled)
     $this->autoDiscoverCommands($container, $loader);
+
+    // STEP 5: Load PACKAGE commands from auto-discovery manifest
+    $this->loadPackageCommands($container, $loader);
 
     // Set loader to application
     $application->setLoader($loader);
@@ -325,5 +329,46 @@ final class ConsoleServiceProvider extends ServiceProvider
       $discovered = $discovery->discover($path, $namespace, true);
       $loader->registerMany($discovered);
     }
+  }
+
+  /**
+   * Load commands from packages auto-discovered via PackageManifest.
+   *
+   * This method loads all commands registered by packages in their composer.json
+   * under extra.toporia.commands configuration.
+   *
+   * Performance: O(N) where N = number of package commands
+   *
+   * @param ContainerInterface $container
+   * @param LazyCommandLoader $loader
+   * @return void
+   */
+  /**
+   * Load package commands from manifest.
+   *
+   * PERFORMANCE OPTIMIZATION:
+   * - Commands are already mapped (name => class) in manifest cache
+   * - No reflection needed here (already done ONCE during manifest build)
+   * - O(1) lookup per command instead of O(N) reflection per request
+   *
+   * @param ContainerInterface $container
+   * @param LazyCommandLoader $loader
+   * @return void
+   */
+  private function loadPackageCommands(ContainerInterface $container, LazyCommandLoader $loader): void
+  {
+    // Get package manifest singleton (performance: reuse across all providers)
+    $manifest = $container->get(PackageManifest::class);
+
+    // Get all package commands (already mapped as name => class in manifest)
+    $commandMap = $manifest->commands();
+
+    if (empty($commandMap)) {
+      return;
+    }
+
+    // Register all package commands with lazy loader
+    // No reflection needed - manifest already cached the name => class mapping!
+    $loader->registerMany($commandMap);
   }
 }

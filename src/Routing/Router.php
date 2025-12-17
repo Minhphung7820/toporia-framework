@@ -478,8 +478,11 @@ final class Router implements RouterInterface
         // Build the core handler
         $coreHandler = $this->buildCoreHandler($handler, $parameters);
 
+        // Expand middleware groups to actual middleware classes
+        $middleware = $this->expandMiddlewareGroups($route->getMiddleware());
+
         // Build middleware pipeline using MiddlewarePipeline class
-        $pipeline = $this->middlewarePipeline->build($route->getMiddleware(), $coreHandler);
+        $pipeline = $this->middlewarePipeline->build($middleware, $coreHandler);
 
         // Execute pipeline and get result
         $result = $pipeline($this->request, $this->response);
@@ -540,7 +543,38 @@ final class Router implements RouterInterface
         };
     }
 
+    /**
+     * Expand middleware groups to actual middleware classes.
+     *
+     * Resolves middleware group names (e.g., 'web', 'api') to their
+     * actual middleware class lists from the middleware configuration.
+     *
+     * @param array<string> $middleware Middleware stack (may contain group names)
+     * @return array<string> Expanded middleware stack (only class names)
+     */
+    private function expandMiddlewareGroups(array $middleware): array
+    {
+        $expanded = [];
 
+        // Load middleware groups from config
+        $middlewareConfig = $this->container->has('config')
+            ? $this->container->get('config')->get('middleware.groups', [])
+            : [];
+
+        foreach ($middleware as $middlewareItem) {
+            // Check if it's a group name
+            if (isset($middlewareConfig[$middlewareItem]) && is_array($middlewareConfig[$middlewareItem])) {
+                // Expand the group recursively
+                $groupMiddleware = $this->expandMiddlewareGroups($middlewareConfig[$middlewareItem]);
+                $expanded = array_merge($expanded, $groupMiddleware);
+            } else {
+                // It's a middleware class or alias
+                $expanded[] = $middlewareItem;
+            }
+        }
+
+        return $expanded;
+    }
 
     /**
      * Get the route collection.
