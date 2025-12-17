@@ -73,6 +73,14 @@ final class VendorPublishCommand extends Command
             'source' => 'packages/api-versioning/config/api.php',
             'destination' => 'config/api.php',
         ],
+        'tabula-config' => [
+            'source' => 'packages/tabula/config/tabula.php',
+            'destination' => 'config/tabula.php',
+        ],
+        'docura-config' => [
+            'source' => 'packages/docura/config/docura.php',
+            'destination' => 'config/docura.php',
+        ],
     ];
 
     public function handle(): int
