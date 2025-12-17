@@ -9,6 +9,7 @@ use Toporia\Framework\Foundation\ServiceProvider;
 use Toporia\Framework\Console\Application;
 use Toporia\Framework\Console\LazyCommandLoader;
 use Toporia\Framework\Console\CommandDiscovery;
+use Toporia\Framework\Console\TerminalCommandRegistrar;
 
 /**
  * Class ConsoleServiceProvider
@@ -52,6 +53,14 @@ final class ConsoleServiceProvider extends ServiceProvider
         : null;
       return new CommandDiscovery($c, $cacheFile);
     });
+
+    // Register terminal command registrar
+    $container->singleton(TerminalCommandRegistrar::class, function ($c) {
+      return new TerminalCommandRegistrar($c);
+    });
+
+    // Register 'terminal' accessor binding
+    $container->bind('terminal', fn($c) => $c->get(TerminalCommandRegistrar::class));
   }
 
   public function boot(ContainerInterface $container): void
@@ -67,7 +76,10 @@ final class ConsoleServiceProvider extends ServiceProvider
     $applicationCommands = $this->loadApplicationCommands($container);
     $loader->registerMany($applicationCommands);
 
-    // STEP 3: Auto-discover commands (if enabled)
+    // STEP 3: Load TERMINAL CLOSURE commands from routes/terminal.php
+    $this->loadTerminalCommands($container, $loader);
+
+    // STEP 4: Auto-discover commands (if enabled)
     $this->autoDiscoverCommands($container, $loader);
 
     // Set loader to application
@@ -239,6 +251,37 @@ final class ConsoleServiceProvider extends ServiceProvider
     return array_filter($commands, function ($value, $key) {
       return is_string($value) && class_exists($value) && !is_numeric($key);
     }, ARRAY_FILTER_USE_BOTH);
+  }
+
+  /**
+   * Load terminal closure commands from routes/terminal.php
+   *
+   * @param ContainerInterface $container
+   * @param LazyCommandLoader $loader
+   * @return void
+   */
+  private function loadTerminalCommands(ContainerInterface $container, LazyCommandLoader $loader): void
+  {
+    $terminalFile = $container->get('path.base') . '/routes/terminal.php';
+
+    // Skip if routes/terminal.php doesn't exist
+    if (!file_exists($terminalFile)) {
+      return;
+    }
+
+    // Load the terminal routes file
+    // This file will call Terminal::command() which registers commands
+    require $terminalFile;
+
+    // Get all registered closure commands
+    $registrar = $container->get(TerminalCommandRegistrar::class);
+    $closureCommands = $registrar->getCommandMap();
+
+    // Register each closure command as if it were a class
+    // We use the actual ClosureCommand instances instead of class names
+    foreach ($closureCommands as $name => $command) {
+      $loader->register($name, get_class($command), fn() => $command);
+    }
   }
 
   /**
