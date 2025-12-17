@@ -262,7 +262,8 @@ final class ConsoleServiceProvider extends ServiceProvider
    */
   private function loadTerminalCommands(ContainerInterface $container, LazyCommandLoader $loader): void
   {
-    $terminalFile = $container->get('path.base') . '/routes/terminal.php';
+    $app = $container->get('app');
+    $terminalFile = $app->getBasePath() . '/routes/terminal.php';
 
     // Skip if routes/terminal.php doesn't exist
     if (!file_exists($terminalFile)) {

@@ -36,6 +36,11 @@ final class LazyCommandLoader implements CommandLoaderInterface
     private array $commandMap = [];
 
     /**
+     * @var array<string, \Closure> Command name => factory closure mapping
+     */
+    private array $factories = [];
+
+    /**
      * @var array<string, string> Cached command descriptions (lazy loaded)
      */
     private array $descriptions = [];
@@ -56,11 +61,16 @@ final class LazyCommandLoader implements CommandLoaderInterface
      *
      * @param string $name Command name
      * @param class-string<Command> $className Command class
+     * @param \Closure|null $factory Optional factory closure for instantiation
      * @return void
      */
-    public function register(string $name, string $className): void
+    public function register(string $name, string $className, ?\Closure $factory = null): void
     {
         $this->commandMap[$name] = $className;
+
+        if ($factory !== null) {
+            $this->factories[$name] = $factory;
+        }
     }
 
     /**
@@ -131,7 +141,7 @@ final class LazyCommandLoader implements CommandLoaderInterface
 
         // Lazy load descriptions
         foreach ($this->commandMap as $name => $className) {
-            $this->descriptions[$name] = $this->getDescription($className);
+            $this->descriptions[$name] = $this->getDescription($name, $className);
         }
 
         return $this->descriptions;
@@ -145,10 +155,11 @@ final class LazyCommandLoader implements CommandLoaderInterface
      *
      * Performance: ~10x faster than full instantiation
      *
+     * @param string $name Command name
      * @param class-string<Command> $className
      * @return string
      */
-    private function getDescription(string $className): string
+    private function getDescription(string $name, string $className): string
     {
         try {
             // Try to read description property via reflection (fastest)
@@ -166,12 +177,39 @@ final class LazyCommandLoader implements CommandLoaderInterface
 
             // Fallback: instantiate command (slower but reliable)
             /** @var Command $instance */
-            $instance = $this->container->get($className);
+            $instance = $this->resolveCommand($name, $className);
             return $instance->getDescription();
         } catch (\Throwable $e) {
             // Return empty on error (command might have constructor dependencies)
             return '';
         }
+    }
+
+    /**
+     * Resolve a command instance using factory or container
+     *
+     * @param string $name Command name
+     * @param class-string<Command>|null $className Command class (optional, will be looked up if null)
+     * @return Command
+     */
+    public function resolveCommand(string $name, ?string $className = null): Command
+    {
+        // Lookup className if not provided
+        if ($className === null) {
+            $className = $this->get($name);
+            if ($className === null) {
+                throw new \RuntimeException("Command not found: {$name}");
+            }
+        }
+
+        // Use factory if registered
+        if (isset($this->factories[$name])) {
+            $factory = $this->factories[$name];
+            return $factory();
+        }
+
+        // Otherwise use container
+        return $this->container->get($className);
     }
 
     /**

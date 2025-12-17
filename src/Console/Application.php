@@ -311,14 +311,9 @@ final class Application
   {
     try {
       // PERFORMANCE: Command instantiated ONLY when executed (not at boot time)
-      $commandClass = $this->loader->get($commandName);
-
-      if ($commandClass === null) {
-        throw new \RuntimeException("Command class not found: {$commandName}");
-      }
-
+      // Use loader's resolveCommand to support both regular commands and closure commands
       /** @var Command $command */
-      $command = $this->container->get($commandClass);
+      $command = $this->loader->resolveCommand($commandName);
 
       // Parse signature to get argument names and map positional arguments
       $this->mapArgumentsFromSignature($command->getSignature());

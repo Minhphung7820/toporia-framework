@@ -6,7 +6,7 @@ namespace Toporia\Framework\Support\Accessors;
 
 use Closure;
 use Toporia\Framework\Console\ClosureCommand;
-use Toporia\Framework\Support\ServiceAccessor;
+use Toporia\Framework\Foundation\ServiceAccessor;
 
 /**
  * Class Terminal
@@ -42,7 +42,7 @@ final class Terminal extends ServiceAccessor
      *
      * @return string
      */
-    protected static function getAccessor(): string
+    protected static function getServiceName(): string
     {
         return 'terminal';
     }
