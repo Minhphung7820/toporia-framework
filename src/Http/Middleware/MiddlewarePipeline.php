@@ -78,8 +78,9 @@ final class MiddlewarePipeline
      */
     private function wrapMiddleware(string|callable $middlewareIdentifier, callable $next): callable
     {
-        // If it's already a callable (factory), use it directly
-        if (is_callable($middlewareIdentifier)) {
+        // If it's already a callable (factory) - but NOT a simple string (which could match a function name)
+        // We only want to treat closures and array callables as middleware factories
+        if (!is_string($middlewareIdentifier) && is_callable($middlewareIdentifier)) {
             $middlewareClass = $middlewareIdentifier;
             $parameters = null;
         } else {
@@ -152,8 +153,8 @@ final class MiddlewarePipeline
      */
     private function instantiateMiddleware(string|callable $middlewareClass, string|array|null $parameters = null): MiddlewareInterface
     {
-        // If it's a callable (closure), call it to get the instance
-        if (is_callable($middlewareClass)) {
+        // If it's a callable (closure/array) - NOT a simple string which could match a function name
+        if (!is_string($middlewareClass) && is_callable($middlewareClass)) {
             $middleware = $middlewareClass($this->container);
         } else {
             // Check if middleware needs parameters (e.g., ThrottleRequests)

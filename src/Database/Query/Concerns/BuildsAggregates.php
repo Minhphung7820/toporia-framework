@@ -56,7 +56,7 @@ trait BuildsAggregates
      * @param string $column Column to sum
      * @return float|int Sum value (0 if no rows)
      */
-    public function sum(string $column): float|int
+    public function sum(string $column): float|int|string
     {
         return $this->aggregate('SUM', $column);
     }
@@ -160,7 +160,7 @@ trait BuildsAggregates
 
         // Execute query directly to get raw array result
         $sql = $this->toSql();
-        $rows = $this->connection->select($sql, $this->bindings);
+        $rows = $this->connection->select($sql, $this->getBindings());
         $result = $rows[0] ?? null;
 
         // Restore original columns
@@ -207,7 +207,7 @@ trait BuildsAggregates
 
         // Execute query
         $sql = $this->toSql();
-        $rows = $this->connection->select($sql, $this->bindings);
+        $rows = $this->connection->select($sql, $this->getBindings());
         $result = $rows[0] ?? [];
 
         // Restore original columns

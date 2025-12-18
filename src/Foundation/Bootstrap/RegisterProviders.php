@@ -34,6 +34,11 @@ final class RegisterProviders
     /**
      * Bootstrap provider registration.
      *
+     * Loading Order:
+     * 1. Framework providers (core framework services)
+     * 2. Auto-discovered package providers (from packages/ and vendor/)
+     * 3. Application providers (from config/providers.php)
+     *
      * @param Application $app Application instance
      * @return void
      */
@@ -53,33 +58,35 @@ final class RegisterProviders
         $providers = array_merge($providers, $packageProviders);
 
         // =====================================================================
-        // 3. APPLICATION PROVIDERS
+        // 3. APPLICATION PROVIDERS (from config/providers.php)
         // =====================================================================
-
-        // Domain Layer - Repositories, Auth, UnitOfWork
-        // MUST be first because other providers depend on it
-        $providers[] = \App\Infrastructure\Providers\DomainServiceProvider::class;
-
-        // Application Layer - Business logic services (Kafka, CSRF, etc.)
-        $providers[] = \App\Infrastructure\Providers\AppServiceProvider::class;
-
-        // Infrastructure Layer - Events, Routes, Schedules
-        $providers[] = \App\Infrastructure\Providers\EventServiceProvider::class;
-        $providers[] = \App\Infrastructure\Providers\RouteServiceProvider::class;
-        $providers[] = \App\Infrastructure\Providers\ScheduleServiceProvider::class;
-
-        // =====================================================================
-        // OPTIONAL PROVIDERS (uncomment when needed)
-        // =====================================================================
-
-        // API Transformers - For formatting API responses
-        // $providers[] = \App\Infrastructure\Providers\TransformerServiceProvider::class;
-
-        // Macro System - For extending framework classes dynamically
-        // $providers[] = \App\Infrastructure\Providers\MacroServiceProvider::class;
+        $appProviders = static::loadApplicationProviders($app);
+        $providers = array_merge($providers, $appProviders);
 
         // Register all providers
         $app->registerProviders($providers);
+    }
+
+    /**
+     * Load application providers from config/providers.php.
+     *
+     * This separates business logic providers from framework core,
+     * following the Clean Architecture principle.
+     *
+     * @param Application $app
+     * @return array<string> Provider class names
+     */
+    private static function loadApplicationProviders(Application $app): array
+    {
+        $configPath = $app->getBasePath() . '/config/providers.php';
+
+        if (!file_exists($configPath)) {
+            return [];
+        }
+
+        $config = require $configPath;
+
+        return $config['providers'] ?? [];
     }
 
     /**
