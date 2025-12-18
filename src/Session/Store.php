@@ -501,4 +501,468 @@ final class Store implements SessionStoreInterface
     {
         return $this->started;
     }
+
+    // ============================================================================
+    // Flash Message Methods
+    // ============================================================================
+
+    /**
+     * Flash a key / value pair to the session.
+     *
+     * Flash data is available only for the next request.
+     * Commonly used for success/error messages after form submissions.
+     *
+     * Performance: O(1) - Array operations
+     *
+     * @param string $key The flash key
+     * @param mixed $value The flash value (default: true)
+     * @return void
+     */
+    public function flash(string $key, mixed $value = true): void
+    {
+        $this->ensureStarted();
+
+        // Store in new flash data
+        $newFlash = $this->driver->get('_flash.new', []);
+        $newFlash[$key] = $value;
+        $this->driver->set('_flash.new', $newFlash);
+
+        // Remove from old flash (if exists) so it persists
+        $oldFlash = $this->driver->get('_flash.old', []);
+        unset($oldFlash[$key]);
+        $this->driver->set('_flash.old', $oldFlash);
+    }
+
+    /**
+     * Flash an input array to the session.
+     *
+     * Stores all form input for repopulating forms after validation failure.
+     *
+     * Performance: O(N) where N = number of input fields
+     *
+     * @param array<string, mixed> $value Input data to flash
+     * @return void
+     */
+    public function flashInput(array $value): void
+    {
+        $this->flash('_old_input', $value);
+    }
+
+    /**
+     * Flash data only for the current request.
+     *
+     * Unlike flash(), this data will NOT be available in the next request.
+     * Useful for displaying data immediately without persisting.
+     *
+     * Performance: O(1) - Array operations
+     *
+     * @param string $key The flash key
+     * @param mixed $value The flash value
+     * @return void
+     */
+    public function now(string $key, mixed $value): void
+    {
+        $this->ensureStarted();
+
+        // Store directly in old flash (will be cleared after this request)
+        $oldFlash = $this->driver->get('_flash.old', []);
+        $oldFlash[$key] = $value;
+        $this->driver->set('_flash.old', $oldFlash);
+    }
+
+    /**
+     * Reflash all flash data for an additional request.
+     *
+     * Keeps all current flash data available for one more request.
+     * Useful when redirecting multiple times.
+     *
+     * Performance: O(N) where N = number of flash keys
+     *
+     * @return void
+     */
+    public function reflash(): void
+    {
+        $this->ensureStarted();
+
+        $oldFlash = $this->driver->get('_flash.old', []);
+        $newFlash = $this->driver->get('_flash.new', []);
+
+        // Merge old into new to persist
+        $this->driver->set('_flash.new', array_merge($oldFlash, $newFlash));
+        $this->driver->set('_flash.old', []);
+    }
+
+    /**
+     * Keep specific flash keys for an additional request.
+     *
+     * Selectively persists only the specified keys.
+     *
+     * Performance: O(K) where K = number of keys to keep
+     *
+     * @param array<int, string>|string $keys Keys to keep
+     * @return void
+     */
+    public function keep(array|string $keys): void
+    {
+        $this->ensureStarted();
+
+        $keys = is_array($keys) ? $keys : func_get_args();
+        $oldFlash = $this->driver->get('_flash.old', []);
+        $newFlash = $this->driver->get('_flash.new', []);
+
+        foreach ($keys as $key) {
+            if (isset($oldFlash[$key])) {
+                $newFlash[$key] = $oldFlash[$key];
+            }
+        }
+
+        $this->driver->set('_flash.new', $newFlash);
+    }
+
+    /**
+     * Age the flash data for the session.
+     *
+     * Moves "new" flash data to "old" (making it available for current request).
+     * Called automatically at the start of each request by middleware.
+     *
+     * Performance: O(1) - Array swap
+     *
+     * @return void
+     */
+    public function ageFlashData(): void
+    {
+        $this->ensureStarted();
+
+        // Move new flash to old
+        $newFlash = $this->driver->get('_flash.new', []);
+        $this->driver->set('_flash.old', $newFlash);
+        $this->driver->set('_flash.new', []);
+    }
+
+    /**
+     * Get flash data by key.
+     *
+     * Retrieves flash data from the "old" storage (set in previous request).
+     *
+     * Performance: O(1) - Array access
+     *
+     * @param string $key The flash key
+     * @param mixed $default Default value if key not found
+     * @return mixed The flash value
+     */
+    public function getFlashData(string $key, mixed $default = null): mixed
+    {
+        $this->ensureStarted();
+
+        $oldFlash = $this->driver->get('_flash.old', []);
+
+        return $oldFlash[$key] ?? $default;
+    }
+
+    /**
+     * Get all flash data.
+     *
+     * Returns all flash data available for the current request.
+     *
+     * Performance: O(1) - Array access
+     *
+     * @return array<string, mixed> All flash data
+     */
+    public function getAllFlash(): array
+    {
+        $this->ensureStarted();
+
+        return $this->driver->get('_flash.old', []);
+    }
+
+    /**
+     * Check if flash data exists for a key.
+     *
+     * Performance: O(1) - Array key check
+     *
+     * @param string $key The flash key to check
+     * @return bool True if flash data exists
+     */
+    public function hasFlashData(string $key): bool
+    {
+        $this->ensureStarted();
+
+        $oldFlash = $this->driver->get('_flash.old', []);
+
+        return array_key_exists($key, $oldFlash);
+    }
+
+    /**
+     * Remove flash data by key.
+     *
+     * Performance: O(1) - Array unset
+     *
+     * @param string $key The flash key to remove
+     * @return void
+     */
+    public function forgetFlash(string $key): void
+    {
+        $this->ensureStarted();
+
+        $oldFlash = $this->driver->get('_flash.old', []);
+        $newFlash = $this->driver->get('_flash.new', []);
+
+        unset($oldFlash[$key], $newFlash[$key]);
+
+        $this->driver->set('_flash.old', $oldFlash);
+        $this->driver->set('_flash.new', $newFlash);
+    }
+
+    /**
+     * Clear all flash data.
+     *
+     * Removes all flash data from both old and new storage.
+     *
+     * Performance: O(1) - Array clear
+     *
+     * @return void
+     */
+    public function flushFlash(): void
+    {
+        $this->ensureStarted();
+
+        $this->driver->remove('_flash.old');
+        $this->driver->remove('_flash.new');
+    }
+
+    // ============================================================================
+    // Additional Utility Methods
+    // ============================================================================
+
+    /**
+     * Increment a session value.
+     *
+     * Performance: O(1) - Read, increment, write
+     *
+     * @param string $key The session key
+     * @param int $amount Amount to increment by
+     * @return int The new value
+     */
+    public function increment(string $key, int $amount = 1): int
+    {
+        $this->ensureStarted();
+
+        $value = (int) $this->driver->get($key, 0);
+        $value += $amount;
+        $this->driver->set($key, $value);
+
+        return $value;
+    }
+
+    /**
+     * Decrement a session value.
+     *
+     * Performance: O(1) - Read, decrement, write
+     *
+     * @param string $key The session key
+     * @param int $amount Amount to decrement by
+     * @return int The new value
+     */
+    public function decrement(string $key, int $amount = 1): int
+    {
+        return $this->increment($key, -$amount);
+    }
+
+    /**
+     * Push a value onto a session array.
+     *
+     * Performance: O(1) - Array append
+     *
+     * @param string $key The session key
+     * @param mixed $value Value to push
+     * @return void
+     */
+    public function push(string $key, mixed $value): void
+    {
+        $this->ensureStarted();
+
+        $array = $this->driver->get($key, []);
+
+        if (!is_array($array)) {
+            $array = [$array];
+        }
+
+        $array[] = $value;
+        $this->driver->set($key, $array);
+    }
+
+    /**
+     * Get the value of a given key and then forget it.
+     *
+     * Alias for pull() method for semantic clarity.
+     *
+     * Performance: O(1) - Get and remove
+     *
+     * @param string $key The session key
+     * @param mixed $default Default value if key not found
+     * @return mixed The session value
+     */
+    public function forget(string $key, mixed $default = null): mixed
+    {
+        return $this->pull($key, $default);
+    }
+
+    /**
+     * Determine if the session contains old input.
+     *
+     * Performance: O(1) - Array key check
+     *
+     * @param string|null $key Specific key to check (null = any old input)
+     * @return bool True if old input exists
+     */
+    public function hasOld(?string $key = null): bool
+    {
+        $old = $this->getFlashData('_old_input', []);
+
+        if ($key === null) {
+            return !empty($old);
+        }
+
+        return array_key_exists($key, $old);
+    }
+
+    /**
+     * Get old input value.
+     *
+     * Retrieves previously flashed input for form repopulation.
+     *
+     * Performance: O(1) - Array access
+     *
+     * @param string|null $key Specific key to get (null = all old input)
+     * @param mixed $default Default value if key not found
+     * @return mixed Old input value
+     */
+    public function old(?string $key = null, mixed $default = null): mixed
+    {
+        $old = $this->getFlashData('_old_input', []);
+
+        if ($key === null) {
+            return $old;
+        }
+
+        return $old[$key] ?? $default;
+    }
+
+    /**
+     * Check if any errors exist in session.
+     *
+     * Performance: O(1) - Array check
+     *
+     * @param string|null $key Specific error key to check
+     * @return bool True if errors exist
+     */
+    public function hasErrors(?string $key = null): bool
+    {
+        $errors = $this->getFlashData('errors', []);
+
+        if ($key === null) {
+            return !empty($errors);
+        }
+
+        return isset($errors[$key]);
+    }
+
+    /**
+     * Get error messages from session.
+     *
+     * Performance: O(1) - Array access
+     *
+     * @param string|null $key Specific error key to get
+     * @return mixed Error messages
+     */
+    public function errors(?string $key = null): mixed
+    {
+        $errors = $this->getFlashData('errors', []);
+
+        if ($key === null) {
+            return $errors;
+        }
+
+        return $errors[$key] ?? null;
+    }
+
+    /**
+     * Get the CSRF token value.
+     *
+     * Performance: O(1) - Direct get
+     *
+     * @return string|null CSRF token
+     */
+    public function token(): ?string
+    {
+        return $this->get('_token');
+    }
+
+    /**
+     * Regenerate the CSRF token.
+     *
+     * Performance: O(1) - Generate and store
+     *
+     * @return string New CSRF token
+     */
+    public function regenerateToken(): string
+    {
+        $token = bin2hex(random_bytes(32));
+        $this->set('_token', $token);
+
+        return $token;
+    }
+
+    /**
+     * Get the previous URL from the session.
+     *
+     * Performance: O(1) - Direct get
+     *
+     * @return string|null Previous URL
+     */
+    public function previousUrl(): ?string
+    {
+        return $this->get('_previous.url');
+    }
+
+    /**
+     * Set the previous URL in the session.
+     *
+     * Performance: O(1) - Direct set
+     *
+     * @param string $url The URL to store
+     * @return void
+     */
+    public function setPreviousUrl(string $url): void
+    {
+        $this->set('_previous.url', $url);
+    }
+
+    /**
+     * Get the intended URL from the session.
+     *
+     * Used for redirecting users back to their original destination after login.
+     *
+     * Performance: O(1) - Direct get
+     *
+     * @param string $default Default URL if no intended URL
+     * @return string Intended URL
+     */
+    public function intended(string $default = '/'): string
+    {
+        return $this->pull('url.intended', $default);
+    }
+
+    /**
+     * Set the intended URL in the session.
+     *
+     * Performance: O(1) - Direct set
+     *
+     * @param string $url The intended URL
+     * @return void
+     */
+    public function setIntended(string $url): void
+    {
+        $this->set('url.intended', $url);
+    }
 }

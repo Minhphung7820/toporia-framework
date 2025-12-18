@@ -37,6 +37,7 @@ final class StartSession implements MiddlewareInterface
      * Handle the request.
      *
      * Starts session at the beginning of request and saves at the end.
+     * Ages flash data so it's available for current request only.
      *
      * @param Request $request
      * @param Response $response
@@ -47,6 +48,9 @@ final class StartSession implements MiddlewareInterface
     {
         // Start session (lazy - only starts if not already started)
         $this->session->start();
+
+        // Age flash data (move "new" to "old" for current request access)
+        $this->session->ageFlashData();
 
         // Store session in request for easy access
         $request->setSession($this->session);

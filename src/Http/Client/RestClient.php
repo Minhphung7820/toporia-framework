@@ -33,6 +33,7 @@ final class RestClient implements HttpClientInterface
     private ?string $accept = null;
     private bool $verifySsl = true;
     private bool $ssrfProtection = true;
+    private string $userAgent = 'Toporia-Framework/1.0';
 
     /**
      * Private/internal IP ranges for SSRF protection.
@@ -343,6 +344,11 @@ final class RestClient implements HttpClientInterface
             $headers['Accept'] = $this->accept;
         }
 
+        // Add User-Agent (required by GitHub API and other APIs)
+        if (!isset($headers['User-Agent'])) {
+            $headers['User-Agent'] = $this->userAgent;
+        }
+
         // Convert to cURL format
         $curlHeaders = [];
         foreach ($headers as $key => $value) {
@@ -350,6 +356,19 @@ final class RestClient implements HttpClientInterface
         }
 
         return $curlHeaders;
+    }
+
+    /**
+     * Set custom User-Agent header.
+     *
+     * @param string $userAgent User-Agent string
+     * @return self
+     */
+    public function withUserAgent(string $userAgent): self
+    {
+        $clone = clone $this;
+        $clone->userAgent = $userAgent;
+        return $clone;
     }
 
     /**
