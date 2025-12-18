@@ -1096,7 +1096,9 @@ abstract class Relation implements RelationInterface
      * Forward method calls to the underlying query builder.
      *
      * This allows relationship instances to act as query builders in eager loading callbacks.
-     * Example: $query->where(), $query->orderBy(), $query->limit(), etc.
+     * Supports:
+     * - Query builder methods: $query->where(), $query->orderBy(), $query->limit(), etc.
+     * - Local scopes: $query->published(), $query->active(), etc.
      *
      * @param string $method Method name
      * @param array $parameters Method parameters
@@ -1104,6 +1106,16 @@ abstract class Relation implements RelationInterface
      */
     public function __call(string $method, array $parameters): mixed
     {
+        // Check if this is a local scope call on the related model
+        // Local scopes are defined as scopeXxx() methods in the model
+        $relatedClass = $this->getRelatedClass();
+        if (!empty($relatedClass) &&
+            method_exists($relatedClass, 'hasLocalScope') &&
+            call_user_func([$relatedClass, 'hasLocalScope'], $method)) {
+            call_user_func([$relatedClass, 'applyLocalScope'], $this->query, $method, ...$parameters);
+            return $this;
+        }
+
         // Forward to query builder and return $this for fluent chaining
         $result = $this->query->$method(...$parameters);
 

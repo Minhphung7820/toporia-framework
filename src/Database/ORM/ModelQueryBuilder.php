@@ -4386,9 +4386,12 @@ class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Magic method to enable fluent get() method.
+     * Magic method to enable fluent get() method and local scopes.
      *
-     * Intercepts ->get() calls and redirects to ->getModels() to return ModelCollection.
+     * Intercepts:
+     * - ->get() calls and redirects to ->getModels() to return ModelCollection
+     * - Local scope calls (e.g., ->published(), ->active()) from HasQueryScopes trait
+     *
      * This is needed because PHP doesn't support return type covariance for Collection types.
      *
      * @param string $method Method name
@@ -4400,6 +4403,14 @@ class ModelQueryBuilder extends QueryBuilder
         // Intercept get() to return ModelCollection
         if ($method === 'get') {
             return $this->getModels();
+        }
+
+        // Check if this is a local scope call (e.g., ->published(), ->active())
+        // Local scopes are defined as scopeXxx() methods in the model
+        if (method_exists($this->modelClass, 'hasLocalScope') &&
+            call_user_func([$this->modelClass, 'hasLocalScope'], $method)) {
+            call_user_func([$this->modelClass, 'applyLocalScope'], $this, $method, ...$arguments);
+            return $this;
         }
 
         // Forward to parent QueryBuilder for other methods

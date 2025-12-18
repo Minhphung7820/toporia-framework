@@ -642,8 +642,7 @@ class HasOne extends Relation
             return $result;
         }
 
-        throw new \BadMethodCallException(
-            sprintf('Method %s::%s does not exist.', static::class, $method)
-        );
+        // Forward to parent for local scope handling
+        return parent::__call($method, $parameters);
     }
 }

@@ -42,6 +42,13 @@ abstract class Model implements ModelInterface, ObservableInterface, \JsonSerial
     use Concerns\HasSerialization;
     use Concerns\HasEvents;
     use Concerns\HasGlobalScopes;
+    use Concerns\HasQueryScopes {
+        // Resolve trait method conflicts - use HasGlobalScopes for global scope methods
+        Concerns\HasGlobalScopes::addGlobalScope insteadof Concerns\HasQueryScopes;
+        Concerns\HasGlobalScopes::getGlobalScopes insteadof Concerns\HasQueryScopes;
+        Concerns\HasGlobalScopes::hasGlobalScope insteadof Concerns\HasQueryScopes;
+        Concerns\HasGlobalScopes::removeGlobalScope insteadof Concerns\HasQueryScopes;
+    }
     use Concerns\HasModelCollections;
     use Concerns\HasMassAssignmentProtection;
     use Concerns\HasEagerLoading;
