@@ -25,6 +25,10 @@ use Toporia\Framework\Support\Pagination\Paginator;
  * @since       2025-01-10
  *
  * @link        https://github.com/Minhphung7820/toporia
+ *
+ * @template TKey of array-key
+ * @template TValue
+ * @implements CollectionInterface<TKey, TValue>
  */
 class Collection implements CollectionInterface, \JsonSerializable
 {
@@ -112,7 +116,7 @@ class Collection implements CollectionInterface, \JsonSerializable
     /**
      * Get first item matching callback or default.
      */
-    public function first(callable $callback = null, mixed $default = null): mixed
+    public function first(?callable $callback = null, mixed $default = null): mixed
     {
         if ($callback === null) {
             return empty($this->items) ? $default : reset($this->items);
@@ -130,7 +134,7 @@ class Collection implements CollectionInterface, \JsonSerializable
     /**
      * Get last item matching callback or default.
      */
-    public function last(callable $callback = null, mixed $default = null): mixed
+    public function last(?callable $callback = null, mixed $default = null): mixed
     {
         if ($callback === null) {
             return empty($this->items) ? $default : end($this->items);
@@ -219,7 +223,7 @@ class Collection implements CollectionInterface, \JsonSerializable
     /**
      * Filter items using callback.
      */
-    public function filter(callable $callback = null): static
+    public function filter(?callable $callback = null): static
     {
         if ($callback === null) {
             return new static(array_filter($this->items));
@@ -345,7 +349,7 @@ class Collection implements CollectionInterface, \JsonSerializable
     /**
      * Sort collection.
      */
-    public function sort(callable $callback = null): static
+    public function sort(?callable $callback = null): static
     {
         $items = $this->items;
 
@@ -1628,7 +1632,7 @@ class Collection implements CollectionInterface, \JsonSerializable
     /**
      * Sole item (get single item or throw exception).
      */
-    public function sole(callable $callback = null): mixed
+    public function sole(?callable $callback = null): mixed
     {
         $items = $callback === null ? $this : $this->filter($callback);
 
@@ -1655,7 +1659,7 @@ class Collection implements CollectionInterface, \JsonSerializable
      * @return mixed First item matching the callback
      * @throws \RuntimeException When no items are found
      */
-    public function firstOrFail(callable $callback = null): mixed
+    public function firstOrFail(?callable $callback = null): mixed
     {
         $items = $callback === null ? $this : $this->filter($callback);
 

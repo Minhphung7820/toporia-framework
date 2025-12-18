@@ -764,7 +764,7 @@ class HasMany extends Relation
      * });
      * ```
      */
-    public function chunkById(int $count, callable $callback, string $column = 'id', string $alias = null): bool
+    public function chunkById(int $count, callable $callback, string $column = 'id', ?string $alias = null): bool
     {
         $alias = $alias ?: $column;
         $lastId = null;

@@ -65,7 +65,7 @@ interface CollectionInterface extends IteratorAggregate, Countable
      * @param (callable(TValue, TKey): bool)|null $callback
      * @return static
      */
-    public function filter(callable $callback = null): static;
+    public function filter(?callable $callback = null): static;
 
     /**
      * Reject items for which callback returns true.
@@ -214,7 +214,7 @@ interface CollectionInterface extends IteratorAggregate, Countable
      * @param mixed $default
      * @return TValue|null
      */
-    public function first(callable $callback = null, mixed $default = null): mixed;
+    public function first(?callable $callback = null, mixed $default = null): mixed;
 
     /**
      * Materialize to array (terminal).

@@ -105,6 +105,20 @@ abstract class BaseRepository implements
     protected array $eagerLoad = [];
 
     /**
+     * Relationships to count.
+     *
+     * @var array<string>
+     */
+    protected array $withCounts = [];
+
+    /**
+     * Relationship aggregate queries (sum, avg, min, max).
+     *
+     * @var array<array{type: string, relation: string, column: string, alias: string|null}>
+     */
+    protected array $withAggregates = [];
+
+    /**
      * Order by clauses.
      *
      * @var array<array{column: string, direction: string}>
@@ -217,6 +231,19 @@ abstract class BaseRepository implements
             $query->with($this->eagerLoad);
         }
 
+        // Apply withCount
+        if (!empty($this->withCounts) && method_exists($query, 'withCount')) {
+            $query->withCount($this->withCounts);
+        }
+
+        // Apply withAggregates (withSum, withAvg, withMin, withMax)
+        foreach ($this->withAggregates as $aggregate) {
+            $method = 'with' . ucfirst($aggregate['type']);
+            if (method_exists($query, $method)) {
+                $query->$method($aggregate['relation'], $aggregate['column'], $aggregate['alias']);
+            }
+        }
+
         // Apply ordering
         foreach ($this->orderBys as $order) {
             $query->orderBy($order['column'], $order['direction']);
@@ -246,6 +273,8 @@ abstract class BaseRepository implements
     {
         $this->query = null;
         $this->eagerLoad = [];
+        $this->withCounts = [];
+        $this->withAggregates = [];
         $this->orderBys = [];
         $this->queryLimit = null;
         $this->queryOffset = null;
@@ -543,9 +572,15 @@ abstract class BaseRepository implements
         // Pagination typically shouldn't be cached
         $this->skipCache();
 
-        $result = $this->newQuery()
-            ->select($columns)
-            ->paginate($perPage, $page);
+        $query = $this->newQuery();
+
+        // Only add explicit select if no withCounts/withAggregates were applied
+        // (these methods add their own select columns that would be overwritten)
+        if (empty($this->withCounts) && empty($this->withAggregates)) {
+            $query->select($columns);
+        }
+
+        $result = $query->paginate($perPage, $page);
 
         $this->resetQuery();
         return $result;
@@ -559,9 +594,15 @@ abstract class BaseRepository implements
         // Cursor pagination shouldn't be cached
         $this->skipCache();
 
-        $result = $this->newQuery()
-            ->select($columns)
-            ->cursorPaginate($perPage, ['cursor' => $cursor]);
+        $query = $this->newQuery();
+
+        // Only add explicit select if no withCounts/withAggregates were applied
+        // (these methods add their own select columns that would be overwritten)
+        if (empty($this->withCounts) && empty($this->withAggregates)) {
+            $query->select($columns);
+        }
+
+        $result = $query->cursorPaginate($perPage, ['cursor' => $cursor]);
 
         $this->resetQuery();
         return $result;
@@ -964,6 +1005,135 @@ abstract class BaseRepository implements
             $this->eagerLoad,
             is_array($relations) ? $relations : [$relations]
         );
+        return $this;
+    }
+
+    /**
+     * Add a relationship count to the query.
+     *
+     * @param array<string>|string $relations Relationship names to count
+     * @return static
+     *
+     * @example
+     * ```php
+     * // Count posts for each category
+     * $categories = $repo->withCount('posts')->all();
+     * // Access: $category->posts_count
+     *
+     * // Multiple relationships
+     * $users = $repo->withCount(['posts', 'comments'])->all();
+     * ```
+     */
+    public function withCount(array|string $relations): static
+    {
+        $this->withCounts = array_merge(
+            $this->withCounts,
+            is_array($relations) ? $relations : [$relations]
+        );
+        return $this;
+    }
+
+    /**
+     * Add a relationship sum aggregate to the query.
+     *
+     * @param string $relation Relationship name
+     * @param string $column Column to sum
+     * @param string|null $alias Optional alias for the result
+     * @return static
+     *
+     * @example
+     * ```php
+     * // Sum order totals for each user
+     * $users = $repo->withSum('orders', 'total')->all();
+     * // Access: $user->orders_sum_total
+     * ```
+     */
+    public function withSum(string $relation, string $column, ?string $alias = null): static
+    {
+        $this->withAggregates[] = [
+            'type' => 'sum',
+            'relation' => $relation,
+            'column' => $column,
+            'alias' => $alias,
+        ];
+        return $this;
+    }
+
+    /**
+     * Add a relationship average aggregate to the query.
+     *
+     * @param string $relation Relationship name
+     * @param string $column Column to average
+     * @param string|null $alias Optional alias for the result
+     * @return static
+     *
+     * @example
+     * ```php
+     * // Average rating for each product
+     * $products = $repo->withAvg('reviews', 'rating')->all();
+     * // Access: $product->reviews_avg_rating
+     * ```
+     */
+    public function withAvg(string $relation, string $column, ?string $alias = null): static
+    {
+        $this->withAggregates[] = [
+            'type' => 'avg',
+            'relation' => $relation,
+            'column' => $column,
+            'alias' => $alias,
+        ];
+        return $this;
+    }
+
+    /**
+     * Add a relationship minimum aggregate to the query.
+     *
+     * @param string $relation Relationship name
+     * @param string $column Column to get minimum
+     * @param string|null $alias Optional alias for the result
+     * @return static
+     *
+     * @example
+     * ```php
+     * // Minimum price for each category
+     * $categories = $repo->withMin('products', 'price')->all();
+     * // Access: $category->products_min_price
+     * ```
+     */
+    public function withMin(string $relation, string $column, ?string $alias = null): static
+    {
+        $this->withAggregates[] = [
+            'type' => 'min',
+            'relation' => $relation,
+            'column' => $column,
+            'alias' => $alias,
+        ];
+        return $this;
+    }
+
+    /**
+     * Add a relationship maximum aggregate to the query.
+     *
+     * @param string $relation Relationship name
+     * @param string $column Column to get maximum
+     * @param string|null $alias Optional alias for the result
+     * @return static
+     *
+     * @example
+     * ```php
+     * // Maximum price for each category
+     * $categories = $repo->withMax('products', 'price')->all();
+     * // Access: $category->products_max_price
+     * ```
+     */
+    public function withMax(string $relation, string $column, ?string $alias = null): static
+    {
+        $this->withAggregates[] = [
+            'type' => 'max',
+            'relation' => $relation,
+            'column' => $column,
+            'alias' => $alias,
+        ];
         return $this;
     }
 

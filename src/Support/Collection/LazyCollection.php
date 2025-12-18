@@ -88,7 +88,7 @@ class LazyCollection implements IteratorAggregate, Countable, CollectionInterfac
     /**
      * Create infinite sequence.
      */
-    public static function infinite(callable $callback = null): static
+    public static function infinite(?callable $callback = null): static
     {
         return new static(function () use ($callback) {
             $i = 0;
@@ -247,7 +247,7 @@ class LazyCollection implements IteratorAggregate, Countable, CollectionInterfac
     /**
      * Filter items lazily.
      */
-    public function filter(callable $callback = null): static
+    public function filter(?callable $callback = null): static
     {
         return new static(function () use ($callback) {
             foreach ($this->getIterator() as $key => $value) {
@@ -506,7 +506,7 @@ class LazyCollection implements IteratorAggregate, Countable, CollectionInterfac
     /**
      * Get first item (terminal).
      */
-    public function first(callable $callback = null, mixed $default = null): mixed
+    public function first(?callable $callback = null, mixed $default = null): mixed
     {
         foreach ($this->getIterator() as $key => $value) {
             if ($callback === null || $callback($value, $key)) {
@@ -908,7 +908,7 @@ class LazyCollection implements IteratorAggregate, Countable, CollectionInterfac
      * @param callable|null $callback
      * @return Collection
      */
-    public function sort(callable $callback = null): Collection
+    public function sort(?callable $callback = null): Collection
     {
         $items = $this->all();
 
@@ -969,7 +969,7 @@ class LazyCollection implements IteratorAggregate, Countable, CollectionInterfac
      * @param mixed $default
      * @return mixed
      */
-    public function last(callable $callback = null, mixed $default = null): mixed
+    public function last(?callable $callback = null, mixed $default = null): mixed
     {
         $result = $default;
 
