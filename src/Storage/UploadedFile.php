@@ -68,6 +68,26 @@ final class UploadedFile implements UploadedFileInterface
     }
 
     /**
+     * Alias for getClientMimeType() - PSR-7 compatibility.
+     *
+     * @return string|null MIME type or null
+     */
+    public function getClientMediaType(): ?string
+    {
+        return $this->getClientMimeType();
+    }
+
+    /**
+     * Get original filename - alias for getClientOriginalName().
+     *
+     * @return string Original filename
+     */
+    public function getClientFilename(): string
+    {
+        return $this->getClientOriginalName();
+    }
+
+    /**
      * Get real MIME type detected from file content (server-side).
      *
      * Security: This validates the actual file content, not just the client-provided type.
@@ -271,10 +291,10 @@ final class UploadedFile implements UploadedFileInterface
     }
 
     /**
-     * Move uploaded file (for testing).
+     * Move uploaded file to target path.
      *
      * @param string $destination Target path
-     * @return bool
+     * @return bool Success status
      */
     public function move(string $destination): bool
     {
@@ -293,5 +313,153 @@ final class UploadedFile implements UploadedFileInterface
         }
 
         return move_uploaded_file($this->path, $destination);
+    }
+
+    /**
+     * Alias for move() - PSR-7 compatibility.
+     *
+     * @param string $targetPath Target path
+     * @return void
+     * @throws \RuntimeException If the file cannot be moved
+     */
+    public function moveTo(string $targetPath): void
+    {
+        if (!$this->move($targetPath)) {
+            throw new \RuntimeException('Failed to move uploaded file to: ' . $targetPath);
+        }
+    }
+
+    /**
+     * Get temporary file path.
+     *
+     * @return string Temporary file path
+     */
+    public function getPathname(): string
+    {
+        return $this->path;
+    }
+
+    /**
+     * Get temporary file path (alias).
+     *
+     * @return string Temporary file path
+     */
+    public function path(): string
+    {
+        return $this->path;
+    }
+
+    /**
+     * Store file with custom filename generator.
+     *
+     * @param string $directory Target directory
+     * @param callable|null $nameGenerator Custom filename generator (receives UploadedFile, returns string)
+     * @param string $disk Storage disk
+     * @return string|false Stored path or false on failure
+     */
+    public function storeAs(string $directory, string $name, string $disk = 'default'): string|false
+    {
+        return $this->store($directory, $name, $disk);
+    }
+
+    /**
+     * Get file extension based on MIME type (more secure than client extension).
+     *
+     * @return string|null Extension or null if unknown
+     */
+    public function guessExtension(): ?string
+    {
+        $mimeType = $this->getRealMimeType();
+
+        if ($mimeType === null) {
+            return $this->getClientOriginalExtension() ?: null;
+        }
+
+        // Common MIME type to extension mapping
+        $mimeToExt = [
+            'image/jpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/gif' => 'gif',
+            'image/webp' => 'webp',
+            'image/svg+xml' => 'svg',
+            'image/bmp' => 'bmp',
+            'image/tiff' => 'tiff',
+            'application/pdf' => 'pdf',
+            'application/zip' => 'zip',
+            'application/x-rar-compressed' => 'rar',
+            'application/x-7z-compressed' => '7z',
+            'application/msword' => 'doc',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
+            'application/vnd.ms-excel' => 'xls',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => 'xlsx',
+            'application/vnd.ms-powerpoint' => 'ppt',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation' => 'pptx',
+            'text/plain' => 'txt',
+            'text/csv' => 'csv',
+            'text/html' => 'html',
+            'application/json' => 'json',
+            'application/xml' => 'xml',
+            'audio/mpeg' => 'mp3',
+            'audio/wav' => 'wav',
+            'audio/ogg' => 'ogg',
+            'video/mp4' => 'mp4',
+            'video/webm' => 'webm',
+            'video/ogg' => 'ogv',
+        ];
+
+        return $mimeToExt[$mimeType] ?? $this->getClientOriginalExtension() ?: null;
+    }
+
+    /**
+     * Get human readable error message.
+     *
+     * @return string|null Error message or null if no error
+     */
+    public function getErrorMessage(): ?string
+    {
+        return match ($this->error) {
+            UPLOAD_ERR_OK => null,
+            UPLOAD_ERR_INI_SIZE => 'The uploaded file exceeds the upload_max_filesize directive in php.ini',
+            UPLOAD_ERR_FORM_SIZE => 'The uploaded file exceeds the MAX_FILE_SIZE directive specified in the HTML form',
+            UPLOAD_ERR_PARTIAL => 'The uploaded file was only partially uploaded',
+            UPLOAD_ERR_NO_FILE => 'No file was uploaded',
+            UPLOAD_ERR_NO_TMP_DIR => 'Missing a temporary folder',
+            UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk',
+            UPLOAD_ERR_EXTENSION => 'A PHP extension stopped the file upload',
+            default => 'Unknown upload error',
+        };
+    }
+
+    /**
+     * Determine if file is an image.
+     *
+     * @return bool True if file is an image
+     */
+    public function isImage(): bool
+    {
+        $mimeType = $this->getRealMimeType();
+        return $mimeType !== null && str_starts_with($mimeType, 'image/');
+    }
+
+    /**
+     * Get image dimensions if file is an image.
+     *
+     * @return array{width: int, height: int}|null Dimensions or null if not an image
+     */
+    public function dimensions(): ?array
+    {
+        if (!$this->isValid() || !$this->isImage()) {
+            return null;
+        }
+
+        $size = @getimagesize($this->path);
+        if ($size === false) {
+            return null;
+        }
+
+        return [
+            'width' => $size[0],
+            'height' => $size[1],
+        ];
     }
 }

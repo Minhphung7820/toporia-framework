@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Toporia\Framework\Http\Contracts;
 
 use Toporia\Framework\Session\Store;
+use Toporia\Framework\Storage\UploadedFile;
 
 
 /**
@@ -249,19 +250,19 @@ interface RequestInterface
     public function cookie(string $name, ?string $default = null, bool $decrypt = false): ?string;
 
     /**
-     * Get uploaded files information.
+     * Get uploaded files as UploadedFile instances.
      *
-     * @return array<string, array|object> Uploaded files information
+     * @return array<string, UploadedFile|array<UploadedFile>> Uploaded files
      */
     public function files(): array;
 
     /**
-     * Get a specific uploaded file.
+     * Get a specific uploaded file as UploadedFile instance.
      *
      * @param string $name File input name
-     * @return array|null File information or null if not found
+     * @return UploadedFile|array<UploadedFile>|null UploadedFile instance or null
      */
-    public function file(string $name): ?array;
+    public function file(string $name): UploadedFile|array|null;
 
     /**
      * Check if a file was uploaded.

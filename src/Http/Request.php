@@ -6,6 +6,7 @@ namespace Toporia\Framework\Http;
 
 use Toporia\Framework\Http\Contracts\RequestInterface;
 use Toporia\Framework\Session\Store;
+use Toporia\Framework\Storage\UploadedFile;
 use Toporia\Framework\Support\Macroable;
 
 /**
@@ -462,31 +463,22 @@ final class Request implements RequestInterface
     }
 
     /**
-     * Get uploaded files information.
+     * Get uploaded files as UploadedFile instances.
      *
-     * Returns information about all uploaded files in a structured format.
-     * Handles both single and multiple file uploads.
+     * Returns all uploaded files wrapped in UploadedFile objects that provide
+     * validation, MIME type detection, and storage abstraction methods.
      *
      * Performance: O(n) where n = number of uploaded files
      *
-     * @return array<string, array|object> Uploaded files information
+     * @return array<string, UploadedFile|array<UploadedFile>> Uploaded files
      *
      * @example
      * ```php
      * $files = $request->files();
-     * // Returns structured file information:
+     * // Returns UploadedFile objects:
      * // [
-     * //   'avatar' => [
-     * //     'name' => 'profile.jpg',
-     * //     'type' => 'image/jpeg',
-     * //     'size' => 102400,
-     * //     'tmp_name' => '/tmp/phpXXXXXX',
-     * //     'error' => 0
-     * //   ],
-     * //   'documents' => [
-     * //     ['name' => 'doc1.pdf', ...],
-     * //     ['name' => 'doc2.pdf', ...]
-     * //   ]
+     * //   'avatar' => UploadedFile { ... },
+     * //   'documents' => [UploadedFile { ... }, UploadedFile { ... }]
      * // ]
      * ```
      */
@@ -500,36 +492,40 @@ final class Request implements RequestInterface
     }
 
     /**
-     * Get a specific uploaded file.
+     * Get a specific uploaded file as UploadedFile instance.
      *
-     * Returns information about a specific uploaded file.
-     * Supports both single files and file arrays.
+     * Returns an UploadedFile object with validation, MIME type detection,
+     * and storage abstraction methods for secure file handling.
      *
      * Performance: O(1) for single files, O(n) for file arrays
      *
      * @param string $name File input name
-     * @return array|null File information or null if not found
+     * @return UploadedFile|array<UploadedFile>|null UploadedFile instance or null
      *
      * @example
      * ```php
      * $avatar = $request->file('avatar');
-     * if ($avatar && $avatar['error'] === UPLOAD_ERR_OK) {
-     *     // Process the uploaded file
-     *     move_uploaded_file($avatar['tmp_name'], $destination);
+     * if ($avatar && $avatar->isValid()) {
+     *     // Validate MIME type (server-side detection for security)
+     *     if ($avatar->isValidMimeType(['image/jpeg', 'image/png', 'image/webp'])) {
+     *         // Store using storage abstraction
+     *         $path = $avatar->store('avatars', null, 'public');
+     *     }
      * }
      * ```
      */
-    public function file(string $name): ?array
+    public function file(string $name): UploadedFile|array|null
     {
         $files = $this->files();
         return $files[$name] ?? null;
     }
 
     /**
-     * Check if a file was uploaded.
+     * Check if a file was uploaded successfully.
      *
-     * Checks if a specific file input has an uploaded file.
-     * Validates that the file was uploaded without errors.
+     * Checks if a specific file input has an uploaded file without errors.
+     * Uses UploadedFile::isValid() for proper validation including
+     * is_uploaded_file() check for security.
      *
      * Performance: O(1)
      *
@@ -540,7 +536,7 @@ final class Request implements RequestInterface
      * ```php
      * if ($request->hasFile('avatar')) {
      *     $file = $request->file('avatar');
-     *     // Process the file
+     *     $path = $file->store('avatars', null, 'public');
      * }
      * ```
      */
@@ -548,27 +544,27 @@ final class Request implements RequestInterface
     {
         $file = $this->file($name);
 
-        if (!$file) {
+        if ($file === null) {
             return false;
         }
 
         // Handle multiple files
-        if (is_array($file) && isset($file[0])) {
-            return $file[0]['error'] === UPLOAD_ERR_OK;
+        if (is_array($file)) {
+            return isset($file[0]) && $file[0] instanceof UploadedFile && $file[0]->isValid();
         }
 
         // Handle single file
-        return isset($file['error']) && $file['error'] === UPLOAD_ERR_OK;
+        return $file instanceof UploadedFile && $file->isValid();
     }
 
     /**
-     * Normalize $_FILES array structure.
+     * Normalize $_FILES array to UploadedFile instances.
      *
-     * PHP's $_FILES array has an inconsistent structure for multiple files.
-     * This method normalizes it to a consistent format.
+     * Converts PHP's inconsistent $_FILES structure to normalized
+     * UploadedFile objects with validation and storage capabilities.
      *
      * @param array $files Raw $_FILES array
-     * @return array Normalized files array
+     * @return array<string, UploadedFile|array<UploadedFile>> Normalized files
      */
     private function normalizeFiles(array $files): array
     {
@@ -581,17 +577,26 @@ final class Request implements RequestInterface
                 $count = count($file['name']);
 
                 for ($i = 0; $i < $count; $i++) {
-                    $normalized[$key][] = [
+                    // Skip empty file slots (when user doesn't select all files in multi-upload)
+                    if (empty($file['tmp_name'][$i]) && $file['error'][$i] === UPLOAD_ERR_NO_FILE) {
+                        continue;
+                    }
+
+                    $normalized[$key][] = UploadedFile::createFromArray([
                         'name' => $file['name'][$i],
                         'type' => $file['type'][$i],
                         'size' => $file['size'][$i],
                         'tmp_name' => $file['tmp_name'][$i],
-                        'error' => $file['error'][$i]
-                    ];
+                        'error' => $file['error'][$i],
+                    ]);
                 }
             } else {
-                // Single file
-                $normalized[$key] = $file;
+                // Single file - skip if no file was uploaded
+                if (empty($file['tmp_name']) && ($file['error'] ?? UPLOAD_ERR_OK) === UPLOAD_ERR_NO_FILE) {
+                    continue;
+                }
+
+                $normalized[$key] = UploadedFile::createFromArray($file);
             }
         }
 

@@ -79,7 +79,4 @@ final class StorageLinkCommand extends Command
 
         return str_repeat('../', count($fromParts)) . implode('/', $toParts);
     }
-
-        return getcwd() ?: dirname(__DIR__, 5);
-    }
 }
