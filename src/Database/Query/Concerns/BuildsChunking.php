@@ -327,26 +327,40 @@ trait BuildsChunking
      */
     public function cursor(): Generator
     {
-        $sql = $this->toSql();
-        $statement = $this->connection->getPdo()->prepare($sql);
+        $pdo = $this->connection->getPdo();
 
-        // Bind parameters (flatten nested bindings for positional binding)
-        $bindingValues = $this->getBindings();
-        foreach ($bindingValues as $index => $value) {
-            $type = match (true) {
-                is_int($value) => \PDO::PARAM_INT,
-                is_bool($value) => \PDO::PARAM_BOOL,
-                is_null($value) => \PDO::PARAM_NULL,
-                default => \PDO::PARAM_STR,
-            };
-            $statement->bindValue($index + 1, $value, $type);
-        }
+        // Enable unbuffered queries for true streaming (O(1) memory)
+        // This prevents MySQL from loading entire result set into PHP memory
+        $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
 
-        $statement->execute();
-        $statement->setFetchMode(\PDO::FETCH_ASSOC);
+        try {
+            $sql = $this->toSql();
+            $statement = $pdo->prepare($sql);
 
-        while ($row = $statement->fetch()) {
-            yield $row;
+            // Bind parameters (flatten nested bindings for positional binding)
+            $bindingValues = $this->getBindings();
+            foreach ($bindingValues as $index => $value) {
+                $type = match (true) {
+                    is_int($value) => \PDO::PARAM_INT,
+                    is_bool($value) => \PDO::PARAM_BOOL,
+                    is_null($value) => \PDO::PARAM_NULL,
+                    default => \PDO::PARAM_STR,
+                };
+                $statement->bindValue($index + 1, $value, $type);
+            }
+
+            $statement->execute();
+            $statement->setFetchMode(\PDO::FETCH_ASSOC);
+
+            while ($row = $statement->fetch()) {
+                yield $row;
+            }
+
+            // Close cursor to free server resources
+            $statement->closeCursor();
+        } finally {
+            // Restore buffered queries for subsequent operations
+            $pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
         }
     }
 
