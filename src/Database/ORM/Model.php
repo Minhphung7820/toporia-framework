@@ -54,6 +54,8 @@ abstract class Model implements ModelInterface, ObservableInterface, \JsonSerial
     use Concerns\HasEagerLoading;
     use Concerns\HasFactory;
     use Concerns\HasRelationships;
+    use Concerns\HasBatchOperations;
+
     /**
      * Database table name (override in child class).
      *
