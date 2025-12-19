@@ -330,15 +330,16 @@ trait BuildsChunking
         $sql = $this->toSql();
         $statement = $this->connection->getPdo()->prepare($sql);
 
-        // Bind parameters
-        foreach ($this->bindings as $key => $value) {
+        // Bind parameters (flatten nested bindings for positional binding)
+        $bindingValues = $this->getBindings();
+        foreach ($bindingValues as $index => $value) {
             $type = match (true) {
                 is_int($value) => \PDO::PARAM_INT,
                 is_bool($value) => \PDO::PARAM_BOOL,
                 is_null($value) => \PDO::PARAM_NULL,
                 default => \PDO::PARAM_STR,
             };
-            $statement->bindValue($key + 1, $value, $type);
+            $statement->bindValue($index + 1, $value, $type);
         }
 
         $statement->execute();
