@@ -124,6 +124,53 @@ final class ElasticsearchClient implements SearchClientInterface
         $this->lastFlushTime = (int) (microtime(true) * 1000);
     }
 
+    /**
+     * Delete an index.
+     *
+     * @param string $index Index name
+     */
+    public function deleteIndex(string $index): void
+    {
+        if (!$this->client->indices()->exists(['index' => $index])) {
+            return;
+        }
+
+        $this->client->indices()->delete(['index' => $index]);
+    }
+
+    /**
+     * Get index statistics.
+     *
+     * @param string $index Index name
+     * @return array<string, mixed>
+     */
+    public function getIndexStats(string $index): array
+    {
+        $response = $this->client->indices()->stats(['index' => $index]);
+        return $response->asArray();
+    }
+
+    /**
+     * Check if an index exists.
+     *
+     * @param string $index Index name
+     * @return bool
+     */
+    public function indexExists(string $index): bool
+    {
+        return (bool) $this->client->indices()->exists(['index' => $index]);
+    }
+
+    /**
+     * Refresh an index to make recent changes searchable.
+     *
+     * @param string $index Index name
+     */
+    public function refresh(string $index): void
+    {
+        $this->client->indices()->refresh(['index' => $index]);
+    }
+
     public function __destruct()
     {
         $this->flushBulkBuffer();
