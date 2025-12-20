@@ -139,9 +139,11 @@ trait BuildsChunking
                 return false; // Stop chunking if callback returns false
             }
 
-            // Get last ID from chunk
+            // Get last ID from chunk - support both array and object
             $lastRow = $results->last();
-            $lastId = $lastRow[$alias] ?? null;
+            $lastId = is_array($lastRow)
+                ? ($lastRow[$alias] ?? null)
+                : ($lastRow->{$alias} ?? $lastRow->$alias ?? null);
 
             if ($lastId === null) {
                 break;
@@ -296,7 +298,10 @@ trait BuildsChunking
 
             foreach ($results as $item) {
                 yield $item;
-                $lastId = $item[$alias] ?? null;
+                // Support both array (QueryBuilder) and object (Model) access
+                $lastId = is_array($item)
+                    ? ($item[$alias] ?? null)
+                    : ($item->{$alias} ?? $item->$alias ?? null);
             }
         } while ($results->count() === $chunkSize);
     }

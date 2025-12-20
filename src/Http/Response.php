@@ -260,6 +260,16 @@ class Response implements ResponseInterface
      */
     public function send(string $content): void
     {
+        // Send status code
+        if (!headers_sent()) {
+            http_response_code($this->status);
+
+            // Send all headers
+            foreach ($this->headers as $name => $value) {
+                header($name . ': ' . $value, replace: true);
+            }
+        }
+
         $this->headersSent = true;
         echo $content;
     }
