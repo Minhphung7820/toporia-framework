@@ -234,13 +234,24 @@ abstract class Command
     }
 
     /**
-     * Write line separator
+     * Write a simple line of text (without any prefix).
+     *
+     * @param string $message
+     * @return void
+     */
+    protected function line(string $message): void
+    {
+        $this->output?->writeln($message);
+    }
+
+    /**
+     * Write line separator.
      *
      * @param string $char
      * @param int $length
      * @return void
      */
-    protected function line(string $char = '-', int $length = 80): void
+    protected function separator(string $char = '-', int $length = 80): void
     {
         $this->output?->line($char, $length);
     }
