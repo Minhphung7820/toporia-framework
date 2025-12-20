@@ -372,4 +372,45 @@ abstract class Command
         // Fallback to current working directory
         return getcwd() ?: dirname(__DIR__, 5);
     }
+
+    /**
+     * Call another console command.
+     *
+     * Allows commands to invoke other commands programmatically.
+     *
+     * @param string $command Command name (e.g., 'cache:clear', 'migrate')
+     * @param array<string, mixed> $parameters Arguments and options
+     * @return int Exit code (0 = success, non-zero = error)
+     */
+    protected function call(string $command, array $parameters = []): int
+    {
+        // Get console application from container
+        if (function_exists('app')) {
+            $consoleApp = app()->get(Application::class);
+            return $consoleApp->call($command, $parameters, $this->output);
+        }
+
+        // Fallback: execute via shell
+        $args = [$command];
+        foreach ($parameters as $key => $value) {
+            if (is_int($key)) {
+                $args[] = escapeshellarg((string) $value);
+            } elseif (str_starts_with($key, '--')) {
+                if (is_bool($value)) {
+                    if ($value) {
+                        $args[] = $key;
+                    }
+                } else {
+                    $args[] = "{$key}=" . escapeshellarg((string) $value);
+                }
+            }
+        }
+
+        $basePath = $this->getBasePath();
+        $consolePath = $basePath . '/console';
+        $cmd = "php {$consolePath} " . implode(' ', $args);
+
+        passthru($cmd, $exitCode);
+        return $exitCode;
+    }
 }
