@@ -386,7 +386,12 @@ abstract class Command
     {
         // Get console application from container
         if (function_exists('app')) {
-            $consoleApp = app()->get(Application::class);
+            $foundationApp = app();
+
+            // Get container and resolve Console\Application
+            $container = $foundationApp->getContainer();
+            $consoleApp = $container->get(Application::class);
+
             return $consoleApp->call($command, $parameters, $this->output);
         }
 

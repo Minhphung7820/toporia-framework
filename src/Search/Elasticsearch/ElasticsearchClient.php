@@ -80,7 +80,8 @@ final class ElasticsearchClient implements SearchClientInterface
 
     public function ensureIndex(string $index, array $definition): void
     {
-        if ($this->client->indices()->exists(['index' => $index])) {
+        $exists = $this->client->indices()->exists(['index' => $index]);
+        if ($exists->asBool()) {
             return;
         }
 
@@ -131,7 +132,8 @@ final class ElasticsearchClient implements SearchClientInterface
      */
     public function deleteIndex(string $index): void
     {
-        if (!$this->client->indices()->exists(['index' => $index])) {
+        $exists = $this->client->indices()->exists(['index' => $index]);
+        if (!$exists->asBool()) {
             return;
         }
 
@@ -158,7 +160,8 @@ final class ElasticsearchClient implements SearchClientInterface
      */
     public function indexExists(string $index): bool
     {
-        return (bool) $this->client->indices()->exists(['index' => $index]);
+        $response = $this->client->indices()->exists(['index' => $index]);
+        return $response->asBool();
     }
 
     /**
