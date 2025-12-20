@@ -564,8 +564,9 @@ abstract class Job implements JobInterface, QueueableInterface
         }
 
         // Try to get JobProgress from container
+        // Use app(Class) instead of app()->get() since Application doesn't have get() method
         if (function_exists('app') && app()->has(JobProgress::class)) {
-            $progressTracker = app()->get(JobProgress::class);
+            $progressTracker = app(JobProgress::class);
             $progressTracker->set($this->id, $progress, $message);
         }
     }
