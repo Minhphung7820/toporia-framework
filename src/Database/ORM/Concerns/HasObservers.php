@@ -8,8 +8,16 @@ namespace Toporia\Framework\Database\ORM\Concerns;
 /**
  * Trait HasObservers
  *
- * Trait providing reusable functionality for HasObservers in the Concerns
- * layer of the Toporia Framework.
+ * Flexible model observers support with multiple registration methods.
+ *
+ * Registration Methods:
+ * 1. Model property: protected static array $observers = [ObserverClass::class];
+ * 2. Config file: config/observers.php with Model::class => [ObserverClass::class]
+ * 3. Runtime: Model::observe(ObserverClass::class) or Model::observe(new Observer())
+ *
+ * Observer Methods:
+ * - creating, created, updating, updated, saving, saved, deleting, deleted
+ * - restoring, restored, replicating, retrieved
  *
  * @author      Phungtruong7820 <minhphung485@gmail.com>
  * @copyright   Copyright (c) 2025 Toporia Framework
@@ -36,11 +44,24 @@ trait HasObservers
     /**
      * Register an observer with the model.
      *
-     * @param object|string $observer Observer instance or class name
+     * Supports multiple input types:
+     * - Class name string: Model::observe(MyObserver::class)
+     * - Object instance: Model::observe(new MyObserver())
+     * - Array of observers: Model::observe([Observer1::class, Observer2::class])
+     *
+     * @param object|string|array<object|string> $observer Observer(s) to register
      * @return void
      */
-    public static function observe(object|string $observer): void
+    public static function observe(object|string|array $observer): void
     {
+        // Handle array of observers
+        if (is_array($observer)) {
+            foreach ($observer as $obs) {
+                static::observe($obs);
+            }
+            return;
+        }
+
         $class = static::class;
 
         if (!isset(static::$modelObservers[$class])) {
@@ -52,7 +73,14 @@ trait HasObservers
             $observer = static::resolveObserverInstance($observer);
         }
 
+        // Avoid duplicate observers
         if ($observer !== null) {
+            $observerClass = get_class($observer);
+            foreach (static::$modelObservers[$class] as $existing) {
+                if (get_class($existing) === $observerClass) {
+                    return; // Already registered
+                }
+            }
             static::$modelObservers[$class][] = $observer;
         }
     }
@@ -136,6 +164,10 @@ trait HasObservers
      * Boot observers for the model.
      * Called automatically when model is first used.
      *
+     * Loads observers from multiple sources (in order):
+     * 1. Model's static $observers property
+     * 2. config/observers.php configuration file
+     *
      * @return void
      */
     protected static function bootObservers(): void
@@ -146,34 +178,122 @@ trait HasObservers
             return;
         }
 
-        // Check for $observers property on model
-        if (property_exists($class, 'observers')) {
-            try {
-                $reflection = new \ReflectionClass($class);
+        // Mark as booted early to prevent recursion
+        static::$observersBooted[$class] = true;
 
-                // Check if property exists and is static
-                if ($reflection->hasProperty('observers')) {
-                    $property = $reflection->getProperty('observers');
-                    $property->setAccessible(true);
+        // Method 1: Load from $observers property on model
+        static::bootObserversFromProperty($class);
 
-                    // Get static property value (null for static properties when called without instance)
-                    $observers = $property->isStatic()
-                        ? $property->getValue()
-                        : $property->getValue(new $class());
+        // Method 2: Load from config/observers.php
+        static::bootObserversFromConfig($class);
+    }
 
-                    if (is_array($observers) && !empty($observers)) {
-                        /** @var array<string> $observers */
-                        foreach ($observers as $observer) {
-                            static::observe($observer);
-                        }
-                    }
-                }
-            } catch (\ReflectionException $e) {
-                // If reflection fails, skip observers registration
-                // This can happen if the property doesn't exist or is not accessible
-            }
+    /**
+     * Boot observers from model's $observers property.
+     *
+     * @param string $class Model class name
+     * @return void
+     */
+    protected static function bootObserversFromProperty(string $class): void
+    {
+        if (!property_exists($class, 'observers')) {
+            return;
         }
 
-        static::$observersBooted[$class] = true;
+        try {
+            $reflection = new \ReflectionClass($class);
+
+            if (!$reflection->hasProperty('observers')) {
+                return;
+            }
+
+            $property = $reflection->getProperty('observers');
+            $property->setAccessible(true);
+
+            $observers = $property->isStatic()
+                ? $property->getValue()
+                : $property->getValue(new $class());
+
+            if (is_array($observers) && !empty($observers)) {
+                foreach ($observers as $observer) {
+                    static::observe($observer);
+                }
+            }
+        } catch (\ReflectionException) {
+            // Skip if reflection fails
+        }
+    }
+
+    /**
+     * Boot observers from config/observers.php.
+     *
+     * Config format:
+     * ```php
+     * return [
+     *     Model::class => [Observer::class],
+     *     Model::class => Observer::class, // Single observer shorthand
+     *     Model::class => [
+     *         Observer1::class,
+     *         ['class' => Observer2::class, 'event' => 'created'],
+     *     ],
+     * ];
+     * ```
+     *
+     * @param string $class Model class name
+     * @return void
+     */
+    protected static function bootObserversFromConfig(string $class): void
+    {
+        if (!function_exists('config')) {
+            return;
+        }
+
+        $allObservers = config('observers', []);
+
+        if (!isset($allObservers[$class])) {
+            return;
+        }
+
+        $observerConfig = $allObservers[$class];
+
+        // Handle single observer shorthand
+        if (is_string($observerConfig)) {
+            static::observe($observerConfig);
+            return;
+        }
+
+        // Handle array of observers
+        if (is_array($observerConfig)) {
+            foreach ($observerConfig as $observer) {
+                if (is_string($observer)) {
+                    static::observe($observer);
+                } elseif (is_array($observer) && isset($observer['class'])) {
+                    // Advanced config with options (future: event filtering, priority)
+                    static::observe($observer['class']);
+                }
+            }
+        }
+    }
+
+    /**
+     * Check if observers are booted for this model.
+     *
+     * @return bool
+     */
+    public static function observersBooted(): bool
+    {
+        return static::$observersBooted[static::class] ?? false;
+    }
+
+    /**
+     * Force re-boot observers (useful for testing).
+     *
+     * @return void
+     */
+    public static function rebootObservers(): void
+    {
+        unset(static::$observersBooted[static::class]);
+        unset(static::$modelObservers[static::class]);
+        static::bootObservers();
     }
 }
