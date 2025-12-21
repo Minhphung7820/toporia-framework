@@ -134,6 +134,7 @@ final class WebSocketTransport implements TransportInterface
             'socket_buffer_size' => 8 * 1024 * 1024,   // 8MB socket buffer
             'send_yield' => true,                      // Yield when send buffer is full (prevents blocking)
             'dispatch_mode' => 2,                      // Fixed mode - same connection always goes to same worker
+            'websocket_compression' => true,           // Enable compression (requires Swoole compiled with zlib)
         ]);
 
         // Store worker count for use in handleRedisMessage
