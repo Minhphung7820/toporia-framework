@@ -256,26 +256,42 @@ class Response implements ResponseInterface
     }
 
     /**
+     * Send HTTP headers without content.
+     *
+     * Useful for streaming responses where headers need to be sent
+     * before the content callback is executed.
+     *
+     * @return void
+     */
+    public function sendHeaders(): void
+    {
+        if ($this->headersSent || headers_sent()) {
+            return;
+        }
+
+        http_response_code($this->status);
+
+        foreach ($this->headers as $name => $value) {
+            header($name . ': ' . $value, replace: true);
+        }
+
+        $this->headersSent = true;
+    }
+
+    /**
      * {@inheritdoc}
      */
     public function send(string $content): void
     {
-        // Send status code
-        if (!headers_sent()) {
-            http_response_code($this->status);
-
-            // Send all headers
-            foreach ($this->headers as $name => $value) {
-                header($name . ': ' . $value, replace: true);
-            }
-        }
-
-        $this->headersSent = true;
+        $this->sendHeaders();
         echo $content;
     }
 
     /**
-     * Send a file download response.
+     * Send a file download response using streaming.
+     *
+     * Memory-efficient for large files - streams in chunks instead of
+     * loading entire file into memory.
      *
      * @param string $path File path.
      * @param string|null $name Download filename (optional).
@@ -293,7 +309,21 @@ class Response implements ResponseInterface
         $this->header('Content-Disposition', 'attachment; filename="' . $name . '"');
         $this->header('Content-Length', (string) filesize($path));
 
-        $this->send(file_get_contents($path));
+        // Send headers first
+        $this->sendHeaders();
+
+        // Stream file in chunks to avoid memory exhaustion
+        $handle = fopen($path, 'rb');
+        if ($handle === false) {
+            return;
+        }
+
+        while (!feof($handle)) {
+            echo fread($handle, 8192);
+            flush();
+        }
+
+        fclose($handle);
     }
 
     /**

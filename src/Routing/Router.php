@@ -391,6 +391,8 @@ final class Router implements RouterInterface
         } elseif ($result instanceof RedirectResponseInterface) {
             $result->sendResponse();
         } elseif ($result instanceof StreamedResponseInterface) {
+            // Send headers before streaming content
+            $result->sendHeaders();
             $result->sendContent();
         } elseif ($result instanceof ResponseInterface) {
             $result->send($result->getContent());

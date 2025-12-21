@@ -110,27 +110,44 @@ final class ResponseFactory implements ResponseFactoryInterface
 
     /**
      * {@inheritdoc}
+     *
+     * Uses streaming for memory-efficient download of large files.
      */
-    public function download(string $file, ?string $name = null, array $headers = [], ?string $disposition = 'attachment'): ResponseInterface
+    public function download(string $file, ?string $name = null, array $headers = [], ?string $disposition = 'attachment'): StreamedResponseInterface
     {
         if (!file_exists($file)) {
             throw new \InvalidArgumentException("File not found: {$file}");
         }
 
         $filename = $name ?: basename($file);
-        $mimeType = mime_content_type($file) ?: 'application/octet-stream';
+        $mimeType = $headers['Content-Type'] ?? (mime_content_type($file) ?: 'application/octet-stream');
+        $fileSize = filesize($file);
 
         $downloadHeaders = array_merge($this->defaultHeaders, [
             'Content-Type' => $mimeType,
             'Content-Disposition' => sprintf('%s; filename="%s"', $disposition, $filename),
-            'Content-Length' => (string) filesize($file),
+            'Content-Length' => (string) $fileSize,
             'Cache-Control' => 'public, must-revalidate',
-            'Pragma' => 'public'
+            'Pragma' => 'public',
         ], $headers);
 
-        $content = file_get_contents($file);
+        // Use streaming to avoid loading entire file into memory
+        $callback = function () use ($file): void {
+            $handle = fopen($file, 'rb');
+            if ($handle === false) {
+                return;
+            }
 
-        return new Response($content, 200, $downloadHeaders);
+            // Stream in 8KB chunks for memory efficiency
+            while (!feof($handle)) {
+                echo fread($handle, 8192);
+                flush();
+            }
+
+            fclose($handle);
+        };
+
+        return new StreamedResponse($callback, 200, $downloadHeaders);
     }
 
     /**

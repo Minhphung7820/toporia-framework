@@ -57,13 +57,15 @@ interface ResponseFactoryInterface
     /**
      * Create a new file download response.
      *
+     * Uses streaming for memory-efficient download of large files.
+     *
      * @param string $file File path
      * @param string|null $name Download filename
      * @param array<string, string> $headers Response headers
      * @param string|null $disposition Content disposition
-     * @return ResponseInterface
+     * @return StreamedResponseInterface
      */
-    public function download(string $file, ?string $name = null, array $headers = [], ?string $disposition = 'attachment'): ResponseInterface;
+    public function download(string $file, ?string $name = null, array $headers = [], ?string $disposition = 'attachment'): StreamedResponseInterface;
 
     /**
      * Create a new streamed response instance.
