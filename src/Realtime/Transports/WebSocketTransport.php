@@ -352,8 +352,11 @@ final class WebSocketTransport implements TransportInterface
 
                     $sentCount = 0;
                     foreach ($this->connections as $connection) {
-                        $subscribed = $connection->isSubscribed($channelName);
-                        echo "[Worker #{$workerId}] Connection {$connection->getId()} subscribed to {$channelName}: " . ($subscribed ? 'yes' : 'no') . "\n";
+                        // Check subscription using Channel manager (source of truth)
+                        // This ensures consistency with handleSubscribe() which uses Channel::subscribe()
+                        $channel = $this->manager->channel($channelName);
+                        $subscribed = $channel->hasSubscriber($connection);
+
                         if ($subscribed) {
                             $fd = (int) $connection->getResource();
                             if ($server->isEstablished($fd)) {
@@ -413,10 +416,11 @@ final class WebSocketTransport implements TransportInterface
             echo "[Broker] Worker #0 has " . count($this->connections) . " connections\n";
 
             // Broadcast to subscribers in Worker #0 (current worker)
+            // Use Channel manager as source of truth for subscriptions
+            $channel = $this->manager->channel($channelName);
             $sentCount = 0;
             foreach ($this->connections as $connection) {
-                $subscribed = $connection->isSubscribed($channelName);
-                echo "[Broker] Connection {$connection->getId()} subscribed to {$channelName}: " . ($subscribed ? 'yes' : 'no') . "\n";
+                $subscribed = $channel->hasSubscriber($connection);
                 if ($subscribed) {
                     $fd = (int) $connection->getResource();
                     if ($server->isEstablished($fd)) {
