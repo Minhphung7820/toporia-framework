@@ -36,7 +36,6 @@ final class NotificationFailed extends Event
         public readonly string $channel,
         public readonly \Throwable $exception
     ) {
-        parent::__construct();
     }
 
     /**

@@ -26,17 +26,24 @@ use Toporia\Framework\Queue\Job;
  */
 final class SendNotificationJob extends Job
 {
+    private array $notifiableData;
+    private string $notifiableClass;
+    private NotificationInterface $notification;
+
     /**
      * @param array $notifiableData Serialized notifiable data
      * @param string $notifiableClass Notifiable class name
      * @param NotificationInterface $notification Notification instance
      */
     public function __construct(
-        private readonly array $notifiableData,
-        private readonly string $notifiableClass,
-        private readonly NotificationInterface $notification
+        array $notifiableData,
+        string $notifiableClass,
+        NotificationInterface $notification
     ) {
         parent::__construct();
+        $this->notifiableData = $notifiableData;
+        $this->notifiableClass = $notifiableClass;
+        $this->notification = $notification;
     }
 
     /**

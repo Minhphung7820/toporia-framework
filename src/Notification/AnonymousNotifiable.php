@@ -59,4 +59,27 @@ final class AnonymousNotifiable implements NotifiableInterface
     {
         app('notification')->send($this, $notification);
     }
+
+    /**
+     * Convert to array for serialization.
+     *
+     * @return array
+     */
+    public function toArray(): array
+    {
+        return ['routes' => $this->routes];
+    }
+
+    /**
+     * Reconstruct from array (for queue deserialization).
+     *
+     * @param array $data
+     * @return self
+     */
+    public static function fromArray(array $data): self
+    {
+        $instance = new self();
+        $instance->routes = $data['routes'] ?? [];
+        return $instance;
+    }
 }

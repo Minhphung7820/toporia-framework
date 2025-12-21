@@ -202,8 +202,9 @@ final class RabbitMqBrokerSubscriptionStrategy implements BrokerSubscriptionStra
                 return;
             }
 
-            // Convert routing key to channel name (. -> :)
-            $channelName = str_replace('.', ':', $routingKey);
+            // Use channel from message payload (authoritative) or routing key as fallback.
+            // Message::toJson() includes the original channel name which clients use to subscribe.
+            $channelName = $messageData['channel'] ?? $routingKey;
             $event = $messageData['event'] ?? 'message';
             $data = $messageData['data'] ?? [];
 

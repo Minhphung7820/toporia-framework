@@ -1862,11 +1862,27 @@ abstract class Model implements ModelInterface, ObservableInterface, \JsonSerial
     }
 
     /**
-     * Magic isset: checks if attribute is present in the bag.
+     * Magic isset: checks if attribute or relation exists and is not null.
+     *
+     * This is called by PHP when using isset() or empty() on a property.
+     * Must return true if the value exists and is not null for empty() to work correctly.
      */
     public function __isset(string $key): bool
     {
-        return isset($this->attributes[$key]);
+        // Check loaded relations first
+        if (array_key_exists($key, $this->relations)) {
+            return $this->relations[$key] !== null;
+        }
+
+        // Check attributes - use array_key_exists for null values, then check value
+        if (array_key_exists($key, $this->attributes)) {
+            return $this->attributes[$key] !== null;
+        }
+
+        // Try getting the value via getAttribute (handles accessors, casts, etc.)
+        // This ensures isset() works for computed/accessor attributes too
+        $value = $this->getAttribute($key);
+        return $value !== null;
     }
 
     /**

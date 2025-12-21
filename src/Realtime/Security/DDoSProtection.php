@@ -88,6 +88,11 @@ final class DDoSProtection
             return true;
         }
 
+        // Whitelist localhost and private network IPs
+        if ($this->isWhitelisted($ipAddress)) {
+            return true;
+        }
+
         // Check if IP is blocked
         if ($this->isBlocked($ipAddress)) {
             return false;
@@ -100,6 +105,32 @@ final class DDoSProtection
         }
 
         return true;
+    }
+
+    /**
+     * Check if IP is whitelisted (localhost, private networks).
+     *
+     * @param string $ipAddress IP address
+     * @return bool
+     */
+    private function isWhitelisted(string $ipAddress): bool
+    {
+        // Localhost
+        if (in_array($ipAddress, ['127.0.0.1', '::1', 'localhost'], true)) {
+            return true;
+        }
+
+        // Private network ranges (RFC 1918)
+        // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+        if (
+            str_starts_with($ipAddress, '10.') ||
+            str_starts_with($ipAddress, '192.168.') ||
+            preg_match('/^172\.(1[6-9]|2[0-9]|3[01])\./', $ipAddress)
+        ) {
+            return true;
+        }
+
+        return false;
     }
 
     /**

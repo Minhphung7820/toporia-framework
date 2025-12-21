@@ -40,7 +40,6 @@ final class NotificationSent extends Event
         public readonly NotificationInterface $notification,
         public readonly array $channels
     ) {
-        parent::__construct();
     }
 
     /**

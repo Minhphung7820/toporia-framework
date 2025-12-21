@@ -46,7 +46,6 @@ final class BulkNotificationFailed extends Event
         public readonly \Throwable $exception,
         public readonly array $failures = []
     ) {
-        parent::__construct();
     }
 
     /**

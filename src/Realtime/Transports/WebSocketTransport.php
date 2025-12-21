@@ -196,7 +196,8 @@ final class WebSocketTransport implements TransportInterface
         $fd = (int) $connection->getResource();
 
         if ($this->server->isEstablished($fd)) {
-            $this->server->close($fd, $code, $reason);
+            // Send WebSocket close frame with code and reason before closing
+            $this->server->disconnect($fd, $code, $reason);
         }
 
         unset($this->connections[$fd]);
@@ -225,7 +226,7 @@ final class WebSocketTransport implements TransportInterface
             $ddosProtection = $this->manager->getDDoSProtection();
             if ($ddosProtection !== null) {
                 if (!$ddosProtection->isAllowed($ipAddress)) {
-                    $server->close($request->fd, 4429, 'Too many connections - DDoS protection');
+                    $server->disconnect($request->fd, 4429, 'Too many connections - DDoS protection');
                     error_log("[{$request->fd}] Blocked by DDoS protection: IP {$ipAddress}");
                     return;
                 }
@@ -242,7 +243,7 @@ final class WebSocketTransport implements TransportInterface
 
             if ($requireAuth && $authData === null) {
                 // Reject unauthenticated connections if required
-                $server->close($request->fd, 4401, 'Authentication required');
+                $server->disconnect($request->fd, 4401, 'Authentication required');
                 error_log("[{$request->fd}] Rejected: Authentication required");
                 return;
             }

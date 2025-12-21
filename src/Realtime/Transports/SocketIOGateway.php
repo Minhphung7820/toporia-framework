@@ -215,7 +215,8 @@ final class SocketIOGateway implements TransportInterface
         $fd = (int) $connection->getResource();
 
         if ($this->server->isEstablished($fd)) {
-            $this->server->close($fd, $code, $reason);
+            // Use disconnect() for WebSocket close with code and reason
+            $this->server->disconnect($fd, $code, $reason);
         }
 
         unset($this->connections[$fd]);
